@@ -162,7 +162,7 @@ class CameraConfig(BaseModel):
 class ImageTransformConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    rotation_degrees: Literal[0, 90, 180, 270] = 0
+    rotation_degrees: Literal[0, 90, 180, 270] = 270
     mirror: bool = True
 
 
