@@ -113,8 +113,6 @@ Creating an isolated Python virtual environment is strongly recommended:
     pip install opencv-python numpy Pillow pydantic email-validator
 """
 
-#!/usr/bin/env python3
-
 from __future__ import annotations
 
 import re
@@ -143,19 +141,19 @@ class KioskState(StrEnum):
 class WindowConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    debug_single_screen: bool = True
+    debug_single_screen: bool = False
     debug_touchscreen_geometry: str = "500x700+50+50"
     debug_preview_geometry: str = "960x540+600+50"
-    touchscreen_geometry: str = "800x480+0+0"
-    preview_geometry: str = "1920x1080+800+0"
+    touchscreen_geometry: str = "600x1024+2160+1491"
+    preview_geometry: str = "2160x3840+0+0"
 
 
 class CameraConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     index: int = 0
-    width: int = 1280
-    height: int = 720
+    width: int = 1920
+    height: int = 1080
     fps: int = 30
 
 
@@ -378,6 +376,27 @@ class HeadshotKiosk:
         y0 = (height - size) // 2
 
         return frame[y0 : y0 + size, x0 : x0 + size]
+
+    def resize_image_to_fit(
+        self,
+        image: Image.Image,
+        target_width: int,
+        target_height: int,
+    ) -> Image.Image:
+        image_width, image_height = image.size
+
+        scale = min(
+            target_width / image_width,
+            target_height / image_height,
+        )
+
+        new_width = max(1, int(image_width * scale))
+        new_height = max(1, int(image_height * scale))
+
+        return image.resize(
+            (new_width, new_height),
+            Image.Resampling.LANCZOS,
+        )
 
     def clear_buttons(self) -> None:
         assert self.button_frame is not None
@@ -614,7 +633,7 @@ class HeadshotKiosk:
             preview_w = max(1, self.preview_window.winfo_width())
             preview_h = max(1, self.preview_window.winfo_height())
 
-            image.thumbnail((preview_w, preview_h), Image.LANCZOS)
+            image = self.resize_image_to_fit(image, preview_w, preview_h)
 
             photo = ImageTk.PhotoImage(image=image)
             self.video_label.configure(image=photo)
