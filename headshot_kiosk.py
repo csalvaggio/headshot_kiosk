@@ -184,6 +184,7 @@ class HeadshotConfig(BaseModel):
     )
     email: EmailConfig = Field(default_factory=EmailConfig)
 
+    scale_preview_to_fit: bool = False
     square_output: bool = True
     countdown_seconds: int = 5
     flash_duration_ms: int = 150
@@ -240,7 +241,8 @@ class HeadshotKiosk:
                 self.config.window.debug_touchscreen_geometry
             )
         else:
-            self.control_window.geometry(self.config.window.touchscreen_geometry)
+            self.control_window.geometry(
+                    self.config.window.touchscreen_geometry)
             self.control_window.attributes("-fullscreen", True)
 
         self.preview_window = tk.Toplevel(self.control_window)
@@ -248,7 +250,8 @@ class HeadshotKiosk:
         self.preview_window.title("Headshot Preview")
 
         if self.config.window.debug_single_screen:
-            self.preview_window.geometry(self.config.window.debug_preview_geometry)
+            self.preview_window.geometry(
+                    self.config.window.debug_preview_geometry)
         else:
             self.preview_window.geometry(self.config.window.preview_geometry)
             self.preview_window.attributes("-fullscreen", True)
@@ -262,7 +265,9 @@ class HeadshotKiosk:
     def setup_camera(self) -> None:
         camera = self.config.camera
 
-        self.cap = cv2.VideoCapture(camera.index)
+        self.cap = cv2.VideoCapture(camera.index, cv2.CAP_V4L2)
+
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera.height)
         self.cap.set(cv2.CAP_PROP_FPS, camera.fps)
@@ -274,7 +279,6 @@ class HeadshotKiosk:
         assert self.preview_window is not None
 
         self.video_label = tk.Label(self.preview_window, bg="black")
-        self.video_label.pack(fill=tk.BOTH, expand=True)
 
         self.preview_countdown_label = tk.Label(
             self.preview_window,
@@ -556,7 +560,8 @@ class HeadshotKiosk:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         uid = self.current_uid or "unknown"
 
-        image_path = self.config.accepted_dir / f"headshot_{uid}_{timestamp}.jpg"
+        image_path = \
+                self.config.accepted_dir / f"headshot_{uid}_{timestamp}.jpg"
 
         success = cv2.imwrite(str(image_path), self.captured_frame)
 
@@ -633,9 +638,27 @@ class HeadshotKiosk:
             preview_w = max(1, self.preview_window.winfo_width())
             preview_h = max(1, self.preview_window.winfo_height())
 
-            image = self.resize_image_to_fit(image, preview_w, preview_h)
+            if self.config.scale_preview_to_fit:
+                image = self.resize_image_to_fit(
+                    image,
+                    preview_w,
+                    preview_h,
+                )
 
             photo = ImageTk.PhotoImage(image=image)
+            image_width = image.width
+            image_height = image.height
+
+            x = max(0, (preview_w - image_width) // 2)
+            y = 0
+
+            self.video_label.place(
+                x=x,
+                y=y,
+                width=image_width,
+                height=image_height,
+            )
+
             self.video_label.configure(image=photo)
             self.video_label.image = photo
 
