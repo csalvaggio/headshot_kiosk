@@ -188,6 +188,7 @@ class HeadshotConfig(BaseModel):
     square_output: bool = True
     countdown_seconds: int = 5
     flash_duration_ms: int = 150
+    preview_countdown_font_size: int = 260
 
     uid_length: int = 9
     debug_card_swipe: str = ";000000000=0000?"
@@ -283,9 +284,17 @@ class HeadshotKiosk:
         self.preview_countdown_label = tk.Label(
             self.preview_window,
             text="",
-            font=("Helvetica", 160, "bold"),
+            font=(
+                "Helvetica",
+                self.config.preview_countdown_font_size,
+                "bold",
+            ),
             fg="white",
             bg="black",
+            anchor="center",
+            justify="center",
+            padx=self.config.preview_countdown_font_size // 2,
+            pady=self.config.preview_countdown_font_size // 4,
         )
 
         self.message_label = tk.Label(
@@ -321,8 +330,7 @@ class HeadshotKiosk:
             return
 
         if (
-            self.config.window.debug_single_screen
-            and isinstance(event.char, str)
+            isinstance(event.char, str)
             and event.char.lower() == "u"
         ):
             uid = self.extract_uid_from_card_swipe(self.config.debug_card_swipe)
@@ -487,13 +495,24 @@ class HeadshotKiosk:
             text = str(remaining)
 
             self.message_label.config(text=text)
-
             self.preview_countdown_label.config(text=text)
+
+            center_x = (
+                self.preview_image_x
+                + self.preview_image_width // 2
+            )
+
+            center_y = (
+                self.preview_image_y
+                + self.preview_image_height // 2
+            )
+
             self.preview_countdown_label.place(
-                relx=0.5,
-                rely=0.5,
+                x=center_x,
+                y=center_y,
                 anchor="center",
             )
+
             self.preview_countdown_label.lift()
 
             self.control_window.after(100, self.run_countdown)
@@ -651,6 +670,11 @@ class HeadshotKiosk:
 
             x = max(0, (preview_w - image_width) // 2)
             y = 0
+
+            self.preview_image_x = x
+            self.preview_image_y = y
+            self.preview_image_width = image_width
+            self.preview_image_height = image_height
 
             self.video_label.place(
                 x=x,
