@@ -187,8 +187,9 @@ class HeadshotConfig(BaseModel):
     scale_preview_to_fit: bool = False
     square_output: bool = True
     countdown_seconds: int = 5
-    flash_duration_ms: int = 150
+    preview_countdown_hide_last_n_seconds: int = 2
     preview_countdown_font_size: int = 260
+    flash_duration_ms: int = 150
 
     uid_length: int = 9
     debug_card_swipe: str = ";000000000=0000?"
@@ -495,7 +496,6 @@ class HeadshotKiosk:
             text = str(remaining)
 
             self.message_label.config(text=text)
-            self.preview_countdown_label.config(text=text)
 
             center_x = (
                 self.preview_image_x
@@ -507,13 +507,16 @@ class HeadshotKiosk:
                 + self.preview_image_height // 2
             )
 
-            self.preview_countdown_label.place(
-                x=center_x,
-                y=center_y,
-                anchor="center",
-            )
-
-            self.preview_countdown_label.lift()
+            if remaining > self.config.preview_countdown_hide_last_seconds:
+                self.preview_countdown_label.config(text=text)
+                self.preview_countdown_label.place(
+                    x=center_x,
+                    y=center_y,
+                    anchor="center",
+                )
+                self.preview_countdown_label.lift()
+            else:
+                self.preview_countdown_label.place_forget()
 
             self.control_window.after(100, self.run_countdown)
         else:
