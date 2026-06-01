@@ -189,6 +189,7 @@ class HeadshotConfig(BaseModel):
     countdown_seconds: int = 5
     preview_countdown_hide_last_n_seconds: int = 2
     preview_countdown_font_size: int = 260
+    countdown_beep_enabled: bool = True
     flash_duration_ms: int = 150
 
     uid_length: int = 9
@@ -216,6 +217,7 @@ class HeadshotKiosk:
         self.current_uid: str | None = None
         self.uid_buffer: str = ""
         self.countdown_start: float = 0.0
+        self.last_beep_remaining: int | None = None
 
         self.video_label: tk.Label | None = None
         self.message_label: tk.Label | None = None
@@ -480,6 +482,7 @@ class HeadshotKiosk:
         ).pack(pady=10)
 
     def start_countdown_state(self) -> None:
+        self.last_beep_remaining = None
         self.state = KioskState.COUNTDOWN
         self.clear_buttons()
         self.countdown_start = time.time()
@@ -494,6 +497,13 @@ class HeadshotKiosk:
 
         if remaining > 0:
             text = str(remaining)
+
+            if (
+                self.config.countdown_beep_enabled
+                and remaining != self.last_beep_remaining
+            ):
+                self.control_window.bell()
+                self.last_beep_remaining = remaining
 
             self.message_label.config(text=text)
 
