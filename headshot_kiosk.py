@@ -507,7 +507,7 @@ class HeadshotKiosk:
                 + self.preview_image_height // 2
             )
 
-            if remaining > self.config.preview_countdown_hide_last_seconds:
+            if remaining > self.config.preview_countdown_hide_last_n_seconds:
                 self.preview_countdown_label.config(text=text)
                 self.preview_countdown_label.place(
                     x=center_x,
