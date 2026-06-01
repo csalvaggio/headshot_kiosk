@@ -118,6 +118,7 @@ from __future__ import annotations
 import re
 import smtplib
 import time
+import platform
 import tkinter as tk
 from datetime import datetime
 from email.message import EmailMessage
@@ -269,9 +270,26 @@ class HeadshotKiosk:
     def setup_camera(self) -> None:
         camera = self.config.camera
 
-        self.cap = cv2.VideoCapture(camera.index, cv2.CAP_V4L2)
+        system = platform.system()
 
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        if system == "Linux":
+            self.cap = cv2.VideoCapture(
+                camera.index,
+                cv2.CAP_V4L2,
+            )
+
+            self.cap.set(
+                cv2.CAP_PROP_FOURCC,
+                cv2.VideoWriter_fourcc(*"MJPG"),
+            )
+        elif system == "Darwin":
+            self.cap = cv2.VideoCapture(
+                camera.index,
+                cv2.CAP_AVFOUNDATION,
+            )
+        else:
+            self.cap = cv2.VideoCapture(camera.index)
+
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera.height)
         self.cap.set(cv2.CAP_PROP_FPS, camera.fps)
