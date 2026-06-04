@@ -115,8 +115,10 @@ Creating an isolated Python virtual environment is strongly recommended:
 
 from __future__ import annotations
 
+import argparse
 import re
 import smtplib
+import tomllib
 import time
 import platform
 import tkinter as tk
@@ -142,66 +144,126 @@ class KioskState(StrEnum):
 class WindowConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    debug_single_screen: bool = False
-    debug_touchscreen_geometry: str = "500x700+50+50"
-    debug_preview_geometry: str = "960x540+600+50"
-    touchscreen_geometry: str = "600x1024+2160+1491"
-    preview_geometry: str = "2160x3840+0+0"
+    debug_single_screen_mode: bool
+    debug_touchscreen_geometry: str
+    debug_preview_geometry: str
+    touchscreen_geometry: str
+    preview_geometry: str
 
 
 class CameraConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    index: int = 0
-    width: int = 1920
-    height: int = 1080
-    fps: int = 30
+    index: int
+    width: int
+    height: int
+    fps: int
 
 
 class ImageTransformConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    rotation_degrees: Literal[0, 90, 180, 270] = 270
-    mirror: bool = True
+    rotation_degrees: Literal[0, 90, 180, 270]
+    mirror_horizontally: bool
 
 
 class EmailConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    enabled: bool = False
-    to_address: EmailStr = "cnspci@rit.edu"
-    from_address: EmailStr = "cnspci@rit.edu"
-    smtp_server: str = "mail.cis.rit.edu"
-    smtp_port: int = 25
+    enabled: bool
+    to_address: EmailStr
+    from_address: EmailStr
+    smtp_server: str
+    smtp_port: int
+
+
+class UiConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    background_color: str
+    foreground_color: str
+    font_family: str
+    message_font_size: int
+    button_font_size: int
+    button_width: int
+    button_height: int
+    button_border_width: int
+    message_wraplength: int
+    message_padx: int
+    message_pady_top: int
+    message_pady_bottom: int
+    button_frame_pady: int
+    button_pady: int
+
+
+class TextConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    control_window_title: str
+    preview_window_title: str
+    idle_message: str
+    preview_message: str
+    camera_error_message: str
+    review_message: str
+    no_image_message: str
+    save_error_message: str
+    submitted_message: str
+    saved_message: str
+    take_photo_button: str
+    accept_button: str
+    retake_button: str
+    cancel_button: str
+    email_subject: str
+    email_body_intro: str
+
+
+class ColorConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    take_photo_button: str
+    accept_button: str
+    retake_button: str
+    cancel_button: str
+    flash_overlay: str
 
 
 class HeadshotConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    window: WindowConfig = Field(default_factory=WindowConfig)
-    camera: CameraConfig = Field(default_factory=CameraConfig)
-    image_transform: ImageTransformConfig = Field(
-        default_factory=ImageTransformConfig
-    )
-    email: EmailConfig = Field(default_factory=EmailConfig)
+    window: WindowConfig
+    camera: CameraConfig
+    image_transform: ImageTransformConfig
+    email: EmailConfig
+    ui: UiConfig
+    text: TextConfig
+    colors: ColorConfig
 
-    scale_preview_to_fit: bool = False
-    square_output: bool = True
-    countdown_seconds: int = 5
-    preview_countdown_hide_last_n_seconds: int = 2
-    preview_countdown_font_size: int = 260
-    countdown_beep_enabled: bool = True
-    flash_duration_ms: int = 150
+    scale_preview_to_fit: bool
+    square_output: bool
+    countdown_seconds: int
+    preview_countdown_hide_last_n_seconds: int
+    preview_countdown_font_size: int
+    countdown_beep_enabled: bool
+    flash_duration_ms: int
+    video_update_interval_ms: int
+    countdown_update_interval_ms: int
+    camera_error_retry_ms: int
+    no_image_retry_ms: int
+    save_error_reset_ms: int
+    post_accept_reset_ms: int
 
-    uid_length: int = 9
-    debug_card_swipe: str = ";000000000=0000?"
+    uid_length: int
+    debug_card_swipe: str
 
-    output_dir: Path = Path.cwd() / "headshots"
+    output_dir: Path
 
     @computed_field
     @property
     def accepted_dir(self) -> Path:
         return self.output_dir / "accepted"
+
+
+HeadshotConfig.model_rebuild()
 
 
 class HeadshotKiosk:
@@ -238,10 +300,10 @@ class HeadshotKiosk:
         self.control_window.focus_force()
 
     def setup_windows(self) -> None:
-        self.control_window.configure(bg="black")
-        self.control_window.title("Headshot Controls")
+        self.control_window.configure(bg=self.config.ui.background_color)
+        self.control_window.title(self.config.text.control_window_title)
 
-        if self.config.window.debug_single_screen:
+        if self.config.window.debug_single_screen_mode:
             self.control_window.geometry(
                 self.config.window.debug_touchscreen_geometry
             )
@@ -251,10 +313,10 @@ class HeadshotKiosk:
             self.control_window.attributes("-fullscreen", True)
 
         self.preview_window = tk.Toplevel(self.control_window)
-        self.preview_window.configure(bg="black")
-        self.preview_window.title("Headshot Preview")
+        self.preview_window.configure(bg=self.config.ui.background_color)
+        self.preview_window.title(self.config.text.preview_window_title)
 
-        if self.config.window.debug_single_screen:
+        if self.config.window.debug_single_screen_mode:
             self.preview_window.geometry(
                     self.config.window.debug_preview_geometry)
         else:
@@ -300,18 +362,21 @@ class HeadshotKiosk:
     def setup_widgets(self) -> None:
         assert self.preview_window is not None
 
-        self.video_label = tk.Label(self.preview_window, bg="black")
+        self.video_label = tk.Label(
+            self.preview_window,
+            bg=self.config.ui.background_color,
+        )
 
         self.preview_countdown_label = tk.Label(
             self.preview_window,
             text="",
             font=(
-                "Helvetica",
+                self.config.ui.font_family,
                 self.config.preview_countdown_font_size,
                 "bold",
             ),
-            fg="white",
-            bg="black",
+            fg=self.config.ui.foreground_color,
+            bg=self.config.ui.background_color,
             anchor="center",
             justify="center",
             padx=self.config.preview_countdown_font_size // 2,
@@ -320,25 +385,35 @@ class HeadshotKiosk:
 
         self.message_label = tk.Label(
             self.control_window,
-            text="Swipe ID Card\nto Begin",
-            font=("Helvetica", 34, "bold"),
-            fg="white",
-            bg="black",
-            wraplength=430,
+            text=self.config.text.idle_message,
+            font=(
+                self.config.ui.font_family,
+                self.config.ui.message_font_size,
+                "bold",
+            ),
+            fg=self.config.ui.foreground_color,
+            bg=self.config.ui.background_color,
+            wraplength=self.config.ui.message_wraplength,
             justify="center",
         )
         self.message_label.pack(
             fill=tk.X,
-            padx=20,
-            pady=(60, 20),
+            padx=self.config.ui.message_padx,
+            pady=(
+                self.config.ui.message_pady_top,
+                self.config.ui.message_pady_bottom,
+            ),
             anchor="n",
         )
 
-        self.button_frame = tk.Frame(self.control_window, bg="black")
-        self.button_frame.pack(pady=20)
+        self.button_frame = tk.Frame(
+            self.control_window,
+            bg=self.config.ui.background_color,
+        )
+        self.button_frame.pack(pady=self.config.ui.button_frame_pady)
 
     def extract_uid_from_card_swipe(self, raw_swipe: str) -> str | None:
-        match = re.search(r";(\d{9})=", raw_swipe)
+        match = re.search(rf";(\d{{{self.config.uid_length}}})=", raw_swipe)
 
         if match is None:
             return None
@@ -396,7 +471,7 @@ class HeadshotKiosk:
         elif transform.rotation_degrees == 270:
             frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-        if transform.mirror:
+        if transform.mirror_horizontally:
             frame = cv2.flip(frame, 1)
 
         return frame
@@ -449,14 +524,18 @@ class HeadshotKiosk:
             self.button_frame,
             text=text,
             command=command,
-            font=("Helvetica", 24, "bold"),
-            fg="white",
+            font=(
+                self.config.ui.font_family,
+                self.config.ui.button_font_size,
+                "bold",
+            ),
+            fg=self.config.ui.foreground_color,
             bg=color,
             activebackground=color,
-            activeforeground="white",
-            width=12,
-            height=2,
-            bd=5,
+            activeforeground=self.config.ui.foreground_color,
+            width=self.config.ui.button_width,
+            height=self.config.ui.button_height,
+            bd=self.config.ui.button_border_width,
         )
 
     def set_idle_state(self) -> None:
@@ -469,7 +548,7 @@ class HeadshotKiosk:
         self.captured_frame = None
 
         self.preview_countdown_label.place_forget()
-        self.message_label.config(text="Swipe ID Card\nto Begin")
+        self.message_label.config(text=self.config.text.idle_message)
 
         self.clear_buttons()
 
@@ -482,22 +561,22 @@ class HeadshotKiosk:
 
         self.preview_countdown_label.place_forget()
         self.message_label.config(
-            text="Position yourself, then touch\n'Take Photo'"
+            text=self.config.text.preview_message
         )
 
         self.clear_buttons()
 
         self.make_button(
-            "Take Photo",
+            self.config.text.take_photo_button,
             self.start_countdown_state,
-            "#008844",
-        ).pack(pady=10)
+            self.config.colors.take_photo_button,
+        ).pack(pady=self.config.ui.button_pady)
 
         self.make_button(
-            "Cancel",
+            self.config.text.cancel_button,
             self.set_idle_state,
-            "#884400",
-        ).pack(pady=10)
+            self.config.colors.cancel_button,
+        ).pack(pady=self.config.ui.button_pady)
 
     def start_countdown_state(self) -> None:
         self.last_beep_remaining = None
@@ -546,7 +625,10 @@ class HeadshotKiosk:
             else:
                 self.preview_countdown_label.place_forget()
 
-            self.control_window.after(100, self.run_countdown)
+            self.control_window.after(
+                self.config.countdown_update_interval_ms,
+                self.run_countdown,
+            )
         else:
             self.preview_countdown_label.place_forget()
             self.capture_image()
@@ -557,7 +639,7 @@ class HeadshotKiosk:
         if self.flash_overlay is not None:
             self.flash_overlay.destroy()
 
-        self.flash_overlay = tk.Frame(self.preview_window, bg="white")
+        self.flash_overlay = tk.Frame(self.preview_window, bg=self.config.colors.flash_overlay)
         self.flash_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.flash_overlay.lift()
 
@@ -575,8 +657,11 @@ class HeadshotKiosk:
         assert self.message_label is not None
 
         if self.current_frame is None:
-            self.message_label.config(text="Camera error. Try again.")
-            self.control_window.after(2000, self.start_preview_state)
+            self.message_label.config(text=self.config.text.camera_error_message)
+            self.control_window.after(
+                self.config.camera_error_retry_ms,
+                self.start_preview_state,
+            )
             return
 
         self.flash_preview()
@@ -590,21 +675,34 @@ class HeadshotKiosk:
 
         self.state = KioskState.REVIEW
 
-        self.message_label.config(text="Review your headshot")
+        self.message_label.config(text=self.config.text.review_message)
         self.clear_buttons()
 
-        self.make_button("Accept", self.accept_image, "#008844").pack(pady=10)
-        self.make_button("Retake", self.start_preview_state, "#aa6600").pack(
-            pady=10
-        )
-        self.make_button("Cancel", self.set_idle_state, "#884400").pack(pady=10)
+        self.make_button(
+            self.config.text.accept_button,
+            self.accept_image,
+            self.config.colors.accept_button,
+        ).pack(pady=self.config.ui.button_pady)
+        self.make_button(
+            self.config.text.retake_button,
+            self.start_preview_state,
+            self.config.colors.retake_button,
+        ).pack(pady=self.config.ui.button_pady)
+        self.make_button(
+            self.config.text.cancel_button,
+            self.set_idle_state,
+            self.config.colors.cancel_button,
+        ).pack(pady=self.config.ui.button_pady)
 
     def accept_image(self) -> None:
         assert self.message_label is not None
 
         if self.captured_frame is None:
-            self.message_label.config(text="No image captured. Try again.")
-            self.control_window.after(2000, self.start_preview_state)
+            self.message_label.config(text=self.config.text.no_image_message)
+            self.control_window.after(
+                self.config.no_image_retry_ms,
+                self.start_preview_state,
+            )
             return
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -616,35 +714,41 @@ class HeadshotKiosk:
         success = cv2.imwrite(str(image_path), self.captured_frame)
 
         if not success:
-            self.message_label.config(text="Could not save image.")
-            self.control_window.after(3000, self.set_idle_state)
+            self.message_label.config(text=self.config.text.save_error_message)
+            self.control_window.after(
+                self.config.save_error_reset_ms,
+                self.set_idle_state,
+            )
             return
 
         if self.config.email.enabled:
             try:
                 self.email_image(image_path)
-                self.message_label.config(text="Submitted. Thank you!")
+                self.message_label.config(text=self.config.text.submitted_message)
             except Exception as exc:
                 self.message_label.config(
                     text=f"Saved, but email failed:\n{exc}"
                 )
         else:
-            self.message_label.config(text="Saved")
+            self.message_label.config(text=self.config.text.saved_message)
 
         self.clear_buttons()
-        self.control_window.after(3000, self.set_idle_state)
+        self.control_window.after(
+            self.config.post_accept_reset_ms,
+            self.set_idle_state,
+        )
 
     def email_image(self, image_path: Path) -> None:
         uid = self.current_uid or "unknown"
         email = self.config.email
 
         msg = EmailMessage()
-        msg["Subject"] = "New department headshot"
+        msg["Subject"] = self.config.text.email_subject
         msg["From"] = str(email.from_address)
         msg["To"] = str(email.to_address)
 
         msg.set_content(
-            f"A new headshot was accepted.\n\n"
+            f"{self.config.text.email_body_intro}\n\n"
             f"UID: {uid}\n"
             f"File: {image_path.name}\n"
         )
@@ -717,7 +821,10 @@ class HeadshotKiosk:
             self.video_label.configure(image=photo)
             self.video_label.image = photo
 
-        self.control_window.after(20, self.update_video)
+        self.control_window.after(
+            self.config.video_update_interval_ms,
+            self.update_video,
+        )
 
     def quit(self) -> None:
         if self.cap is not None:
@@ -726,8 +833,34 @@ class HeadshotKiosk:
         self.control_window.destroy()
 
 
+def load_config(config_path: Path) -> HeadshotConfig:
+    with config_path.open("rb") as f:
+        config_data = tomllib.load(f)
+
+    return HeadshotConfig.model_validate(config_data)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the headshot kiosk application. All operational "
+            "configuration is read from TOML."
+        ),
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to a complete TOML configuration file.",
+    )
+
+    return parser.parse_args()
+
+
 def main() -> None:
-    config = HeadshotConfig()
+    args = parse_args()
+    config = load_config(args.config)
     root = tk.Tk()
 
     HeadshotKiosk(root, config)

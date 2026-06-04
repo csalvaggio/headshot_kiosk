@@ -1,0 +1,92 @@
+#
+# Headshot Kiosk configuration
+#
+# Run with:
+#   python3 headshot_kiosk.py --config <this_file>.toml
+#
+
+scale_preview_to_fit = true
+square_output = true
+countdown_seconds = 5
+preview_countdown_hide_last_n_seconds = 2
+preview_countdown_font_size = 260
+countdown_beep_enabled = true
+flash_duration_ms = 150
+video_update_interval_ms = 20
+countdown_update_interval_ms = 100
+camera_error_retry_ms = 2000
+no_image_retry_ms = 2000
+save_error_reset_ms = 3000
+post_accept_reset_ms = 3000
+uid_length = 9
+debug_card_swipe = ";000000000=0000?"
+output_dir = "headshots"
+
+[window]
+debug_single_screen_mode = true
+debug_touchscreen_geometry = "500x700+50+50"
+debug_preview_geometry = "720x800+600+50"
+touchscreen_geometry = "600x1024+2160+1491"
+preview_geometry = "2160x3840+0+0"
+
+[camera]
+index = 0
+width = 1920
+height = 1080
+fps = 30
+
+[image_transform]
+rotation_degrees = 0
+mirror_horizontally = false
+
+[email]
+enabled = false
+to_address = "cnspci@rit.edu"
+from_address = "cnspci@rit.edu"
+smtp_server = "mail.cis.rit.edu"
+smtp_port = 25
+
+#
+# YOU SHOULD NOT HAVE TO CHANGE ANYTHING BEYOND THIS POINT
+#
+
+[ui]
+background_color = "black"
+foreground_color = "white"
+font_family = "Helvetica"
+message_font_size = 34
+button_font_size = 24
+button_width = 12
+button_height = 2
+button_border_width = 5
+message_wraplength = 430
+message_padx = 20
+message_pady_top = 60
+message_pady_bottom = 20
+button_frame_pady = 20
+button_pady = 10
+
+[text]
+control_window_title = "Headshot Controls"
+preview_window_title = "Headshot Preview"
+idle_message = "Swipe ID Card\nto Begin"
+preview_message = "Position yourself, then touch\n'Take Photo'"
+camera_error_message = "Camera error. Try again."
+review_message = "Review your headshot"
+no_image_message = "No image captured. Try again."
+save_error_message = "Could not save image."
+submitted_message = "Submitted. Thank you!"
+saved_message = "Saved"
+take_photo_button = "Take Photo"
+accept_button = "Accept"
+retake_button = "Retake"
+cancel_button = "Cancel"
+email_subject = "New department headshot"
+email_body_intro = "A new headshot was accepted."
+
+[colors]
+take_photo_button = "#008844"
+accept_button = "#008844"
+retake_button = "#aa6600"
+cancel_button = "#884400"
+flash_overlay = "white"
