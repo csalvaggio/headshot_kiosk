@@ -116,12 +116,13 @@ Creating an isolated Python virtual environment is strongly recommended:
 from __future__ import annotations
 
 import argparse
+import platform
 import re
 import smtplib
-import tomllib
+import subprocess
 import time
-import platform
 import tkinter as tk
+import tomllib
 from datetime import datetime
 from email.message import EmailMessage
 from enum import StrEnum
@@ -131,7 +132,10 @@ from typing import Any, Callable, Literal
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
+from pydantic import BaseModel, ConfigDict, EmailStr, computed_field
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 class KioskState(StrEnum):
@@ -244,6 +248,8 @@ class HeadshotConfig(BaseModel):
     preview_countdown_hide_last_n_seconds: int
     preview_countdown_font_size: int
     countdown_beep_enabled: bool
+    countdown_sound_file: str
+    shutter_sound_file: str
     flash_duration_ms: int
     video_update_interval_ms: int
     countdown_update_interval_ms: int
@@ -263,9 +269,6 @@ class HeadshotConfig(BaseModel):
         return self.output_dir / "accepted"
 
 
-HeadshotConfig.model_rebuild()
-
-
 class HeadshotKiosk:
     def __init__(self, control_window: tk.Tk, config: HeadshotConfig) -> None:
         self.config = config
@@ -281,6 +284,11 @@ class HeadshotKiosk:
         self.uid_buffer: str = ""
         self.countdown_start: float = 0.0
         self.last_beep_remaining: int | None = None
+
+        self.preview_image_x: int = 0
+        self.preview_image_y: int = 0
+        self.preview_image_width: int = 1
+        self.preview_image_height: int = 1
 
         self.video_label: tk.Label | None = None
         self.message_label: tk.Label | None = None
@@ -308,8 +316,7 @@ class HeadshotKiosk:
                 self.config.window.debug_touchscreen_geometry
             )
         else:
-            self.control_window.geometry(
-                    self.config.window.touchscreen_geometry)
+            self.control_window.geometry(self.config.window.touchscreen_geometry)
             self.control_window.attributes("-fullscreen", True)
 
         self.preview_window = tk.Toplevel(self.control_window)
@@ -317,8 +324,7 @@ class HeadshotKiosk:
         self.preview_window.title(self.config.text.preview_window_title)
 
         if self.config.window.debug_single_screen_mode:
-            self.preview_window.geometry(
-                    self.config.window.debug_preview_geometry)
+            self.preview_window.geometry(self.config.window.debug_preview_geometry)
         else:
             self.preview_window.geometry(self.config.window.preview_geometry)
             self.preview_window.attributes("-fullscreen", True)
@@ -331,24 +337,16 @@ class HeadshotKiosk:
 
     def setup_camera(self) -> None:
         camera = self.config.camera
-
         system = platform.system()
 
         if system == "Linux":
-            self.cap = cv2.VideoCapture(
-                camera.index,
-                cv2.CAP_V4L2,
-            )
-
+            self.cap = cv2.VideoCapture(camera.index, cv2.CAP_V4L2)
             self.cap.set(
                 cv2.CAP_PROP_FOURCC,
                 cv2.VideoWriter_fourcc(*"MJPG"),
             )
         elif system == "Darwin":
-            self.cap = cv2.VideoCapture(
-                camera.index,
-                cv2.CAP_AVFOUNDATION,
-            )
+            self.cap = cv2.VideoCapture(camera.index, cv2.CAP_AVFOUNDATION)
         else:
             self.cap = cv2.VideoCapture(camera.index)
 
@@ -412,6 +410,23 @@ class HeadshotKiosk:
         )
         self.button_frame.pack(pady=self.config.ui.button_frame_pady)
 
+    def resolve_sound_path(self, sound_file: str) -> Path:
+        path = Path(sound_file)
+
+        if path.is_absolute():
+            return path
+
+        return SCRIPT_DIR / path
+
+    def build_sound_command(self, sound_file: str) -> tuple[str, ...]:
+        sound_path = self.resolve_sound_path(sound_file)
+        system = platform.system()
+
+        if system == "Darwin":
+            return ("afplay", str(sound_path))
+
+        return ("paplay", str(sound_path))
+
     def extract_uid_from_card_swipe(self, raw_swipe: str) -> str | None:
         match = re.search(rf";(\d{{{self.config.uid_length}}})=", raw_swipe)
 
@@ -425,10 +440,7 @@ class HeadshotKiosk:
             self.quit()
             return
 
-        if (
-            isinstance(event.char, str)
-            and event.char.lower() == "u"
-        ):
+        if isinstance(event.char, str) and event.char.lower() == "u":
             uid = self.extract_uid_from_card_swipe(self.config.debug_card_swipe)
 
             if uid is not None:
@@ -459,7 +471,11 @@ class HeadshotKiosk:
     def start_session_with_uid(self, uid: str) -> None:
         self.current_uid = uid
         self.uid_buffer = ""
+
         self.start_preview_state()
+
+        if self.config.countdown_beep_enabled:
+            self.control_window.after(100, self.prime_audio)
 
     def transform_frame(self, frame: np.ndarray) -> np.ndarray:
         transform = self.config.image_transform
@@ -560,9 +576,7 @@ class HeadshotKiosk:
         self.captured_frame = None
 
         self.preview_countdown_label.place_forget()
-        self.message_label.config(
-            text=self.config.text.preview_message
-        )
+        self.message_label.config(text=self.config.text.preview_message)
 
         self.clear_buttons()
 
@@ -579,17 +593,17 @@ class HeadshotKiosk:
         ).pack(pady=self.config.ui.button_pady)
 
     def start_countdown_state(self) -> None:
-        self.last_beep_remaining = None
         self.state = KioskState.COUNTDOWN
         self.clear_buttons()
-        self.countdown_start = time.time()
+        self.countdown_start = time.monotonic()
+        self.last_beep_remaining = None
         self.run_countdown()
 
     def run_countdown(self) -> None:
         assert self.message_label is not None
         assert self.preview_countdown_label is not None
 
-        elapsed = time.time() - self.countdown_start
+        elapsed = time.monotonic() - self.countdown_start
         remaining = self.config.countdown_seconds - int(elapsed)
 
         if remaining > 0:
@@ -599,20 +613,13 @@ class HeadshotKiosk:
                 self.config.countdown_beep_enabled
                 and remaining != self.last_beep_remaining
             ):
-                self.control_window.bell()
+                self.play_countdown_sound()
                 self.last_beep_remaining = remaining
 
             self.message_label.config(text=text)
 
-            center_x = (
-                self.preview_image_x
-                + self.preview_image_width // 2
-            )
-
-            center_y = (
-                self.preview_image_y
-                + self.preview_image_height // 2
-            )
+            center_x = self.preview_image_x + self.preview_image_width // 2
+            center_y = self.preview_image_y + self.preview_image_height // 2
 
             if remaining > self.config.preview_countdown_hide_last_n_seconds:
                 self.preview_countdown_label.config(text=text)
@@ -639,7 +646,10 @@ class HeadshotKiosk:
         if self.flash_overlay is not None:
             self.flash_overlay.destroy()
 
-        self.flash_overlay = tk.Frame(self.preview_window, bg=self.config.colors.flash_overlay)
+        self.flash_overlay = tk.Frame(
+            self.preview_window,
+            bg=self.config.colors.flash_overlay,
+        )
         self.flash_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.flash_overlay.lift()
 
@@ -665,6 +675,7 @@ class HeadshotKiosk:
             return
 
         self.flash_preview()
+        self.play_shutter_sound()
 
         if self.config.square_output:
             self.captured_frame = self.center_square_crop(
@@ -683,11 +694,13 @@ class HeadshotKiosk:
             self.accept_image,
             self.config.colors.accept_button,
         ).pack(pady=self.config.ui.button_pady)
+
         self.make_button(
             self.config.text.retake_button,
             self.start_preview_state,
             self.config.colors.retake_button,
         ).pack(pady=self.config.ui.button_pady)
+
         self.make_button(
             self.config.text.cancel_button,
             self.set_idle_state,
@@ -707,9 +720,7 @@ class HeadshotKiosk:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         uid = self.current_uid or "unknown"
-
-        image_path = \
-                self.config.accepted_dir / f"headshot_{uid}_{timestamp}.jpg"
+        image_path = self.config.accepted_dir / f"headshot_{uid}_{timestamp}.jpg"
 
         success = cv2.imwrite(str(image_path), self.captured_frame)
 
@@ -793,11 +804,7 @@ class HeadshotKiosk:
             preview_h = max(1, self.preview_window.winfo_height())
 
             if self.config.scale_preview_to_fit:
-                image = self.resize_image_to_fit(
-                    image,
-                    preview_w,
-                    preview_h,
-                )
+                image = self.resize_image_to_fit(image, preview_w, preview_h)
 
             photo = ImageTk.PhotoImage(image=image)
             image_width = image.width
@@ -825,6 +832,41 @@ class HeadshotKiosk:
             self.config.video_update_interval_ms,
             self.update_video,
         )
+
+    def prime_audio(self) -> None:
+        if not self.config.countdown_beep_enabled:
+            return
+
+        try:
+            subprocess.run(
+                self.build_sound_command(self.config.countdown_sound_file),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=2.0,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def play_countdown_sound(self) -> None:
+        try:
+            subprocess.Popen(
+                self.build_sound_command(self.config.countdown_sound_file),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            self.control_window.bell()
+
+    def play_shutter_sound(self) -> None:
+        try:
+            subprocess.Popen(
+                self.build_sound_command(self.config.shutter_sound_file),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
 
     def quit(self) -> None:
         if self.cap is not None:
