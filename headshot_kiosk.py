@@ -833,18 +833,44 @@ class HeadshotKiosk:
             self.update_video,
         )
 
-    def prime_audio(self) -> None:
+    def prime_audio(self, silent: bool = True) -> None:
         if not self.config.countdown_beep_enabled:
             return
 
         try:
+            sound_path = self.resolve_sound_path(
+                self.config.countdown_sound_file
+            )
+
+            system = platform.system()
+
+            if silent:
+                if system == "Darwin":
+                    command = (
+                        "afplay",
+                        "-v",
+                        "0",
+                        str(sound_path),
+                    )
+                else:
+                    command = (
+                        "paplay",
+                        "--volume=0",
+                        str(sound_path),
+                    )
+            else:
+                command = self.build_sound_command(
+                    self.config.countdown_sound_file
+                )
+
             subprocess.run(
-                self.build_sound_command(self.config.countdown_sound_file),
+                command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
                 timeout=2.0,
             )
+
         except (OSError, subprocess.TimeoutExpired):
             pass
 
