@@ -838,26 +838,18 @@ class HeadshotKiosk:
             return
 
         try:
-            sound_path = self.resolve_sound_path(
-                self.config.countdown_sound_file
-            )
-
             system = platform.system()
 
-            if silent:
-                if system == "Darwin":
-                    command = (
-                        "afplay",
-                        "-v",
-                        "0",
-                        str(sound_path),
-                    )
-                else:
-                    command = (
-                        "paplay",
-                        "--volume=0",
-                        str(sound_path),
-                    )
+            if silent and system == "Darwin":
+                sound_path = self.resolve_sound_path(
+                    self.config.countdown_sound_file
+                )
+                command = (
+                    "afplay",
+                    "-v",
+                    "0",
+                    str(sound_path),
+                )
             else:
                 command = self.build_sound_command(
                     self.config.countdown_sound_file
