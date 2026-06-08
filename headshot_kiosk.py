@@ -425,7 +425,7 @@ class HeadshotKiosk:
         if system == "Darwin":
             return ("afplay", str(sound_path))
 
-        return ("paplay", str(sound_path))
+        return ("aplay", str(sound_path))
 
     def extract_uid_from_card_swipe(self, raw_swipe: str) -> str | None:
         match = re.search(rf";(\d{{{self.config.uid_length}}})=", raw_swipe)
