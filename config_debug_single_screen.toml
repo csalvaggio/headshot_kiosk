@@ -39,7 +39,18 @@ fps = 30
 
 [image_transform]
 rotation_degrees = 0
-mirror_horizontally = false
+mirror_horizontally = true
+
+[eye_crop]
+enabled = true
+model_path = "face_detection_yunet_2023mar.onnx"
+detection_width = 320
+desired_eye_y_fraction = 0.38
+min_score = 0.75
+smoothing_alpha_small = 0.10
+smoothing_alpha_large = 0.50
+large_motion_threshold = 80.0
+crop_deadband = 6
 
 [email]
 enabled = false

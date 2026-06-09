@@ -33,7 +33,7 @@ Architecture / Platform Notes
 -----------------------------
 
 tkinter
-~~~~~~~~
+~~~~~~~
 
 The tkinter GUI toolkit is part of the standard Python library, but some
 platforms distribute it separately from the base interpreter.
@@ -43,7 +43,7 @@ Linux (Debian / Ubuntu / Raspberry Pi OS):
     sudo apt install python3-tk
 
 macOS
-~~~~~
+~~~~
 
 If using the official Python.org installer, tkinter is usually included.
 
@@ -52,7 +52,7 @@ If using Homebrew Python, tkinter support may require:
     brew install python-tk
 
 OpenCV (cv2)
-~~~~~~~~~~~~
+~~~~~~~~~~~
 
 The OpenCV package may have additional native dependencies depending on
 platform and camera backend support.
@@ -62,7 +62,7 @@ Linux systems may require:
     sudo apt install libopencv-dev
 
 Camera Device Access
-~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
 
 Linux:
     Cameras are typically exposed as:
@@ -79,13 +79,13 @@ macOS:
         System Settings -> Privacy & Security -> Camera
 
 Wayland / X11 Notes
-~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~
 
 Some Linux desktop environments using Wayland may exhibit differences in
 camera access or Tkinter window behavior compared to X11.
 
 Raspberry Pi Notes
-~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
 
 On Raspberry Pi OS Bookworm, camera compatibility can vary depending on:
 
@@ -132,7 +132,7 @@ from typing import Any, Callable, Literal
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
-from pydantic import BaseModel, ConfigDict, EmailStr, computed_field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -169,6 +169,20 @@ class ImageTransformConfig(BaseModel):
 
     rotation_degrees: Literal[0, 90, 180, 270]
     mirror_horizontally: bool
+
+
+class EyeCropConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+    model_path: Path
+    detection_width: int
+    desired_eye_y_fraction: float
+    min_score: float
+    smoothing_alpha_small: float
+    smoothing_alpha_large: float
+    large_motion_threshold: float
+    crop_deadband: int
 
 
 class EmailConfig(BaseModel):
@@ -237,6 +251,7 @@ class HeadshotConfig(BaseModel):
     window: WindowConfig
     camera: CameraConfig
     image_transform: ImageTransformConfig
+    eye_crop: EyeCropConfig
     email: EmailConfig
     ui: UiConfig
     text: TextConfig
@@ -279,6 +294,11 @@ class HeadshotKiosk:
         self.cap: cv2.VideoCapture | None = None
         self.current_frame: np.ndarray | None = None
         self.captured_frame: np.ndarray | None = None
+
+        self.eye_detector: cv2.FaceDetectorYN | None = None
+        self.eye_detector_input_size: tuple[int, int] | None = None
+        self.smoothed_eye_y: float | None = None
+        self.displayed_crop_top: int | None = None
 
         self.current_uid: str | None = None
         self.uid_buffer: str = ""
@@ -501,6 +521,166 @@ class HeadshotKiosk:
 
         return frame[y0 : y0 + size, x0 : x0 + size]
 
+    def reset_eye_crop_state(self) -> None:
+        self.smoothed_eye_y = None
+        self.displayed_crop_top = None
+
+    def resolve_eye_model_path(self) -> Path:
+        path = Path(self.config.eye_crop.model_path)
+
+        if path.is_absolute():
+            return path
+
+        return SCRIPT_DIR / path
+
+    def ensure_eye_detector(
+        self,
+        frame_width: int,
+        frame_height: int,
+    ) -> bool:
+        eye_crop = self.config.eye_crop
+
+        detection_width = min(
+            eye_crop.detection_width,
+            frame_width,
+        )
+
+        detection_scale = detection_width / frame_width
+        detection_height = max(
+            1,
+            int(round(frame_height * detection_scale)),
+        )
+
+        input_size = (detection_width, detection_height)
+
+        if (
+            self.eye_detector is not None
+            and self.eye_detector_input_size == input_size
+        ):
+            return True
+
+        model_path = self.resolve_eye_model_path()
+
+        if not model_path.exists():
+            print(
+                f"Eye crop disabled: missing YuNet model {model_path}"
+            )
+            self.eye_detector = None
+            self.eye_detector_input_size = None
+            return False
+
+        self.eye_detector = cv2.FaceDetectorYN.create(
+            str(model_path),
+            "",
+            input_size,
+            score_threshold=eye_crop.min_score,
+            nms_threshold=0.3,
+            top_k=5000,
+        )
+        self.eye_detector_input_size = input_size
+
+        return True
+
+    def eye_square_crop(self, frame: np.ndarray) -> np.ndarray:
+        eye_crop = self.config.eye_crop
+        height, width = frame.shape[:2]
+        crop_size = min(width, height)
+
+        if not eye_crop.enabled:
+            return self.center_square_crop(frame)
+
+        if not self.ensure_eye_detector(width, height):
+            return self.center_square_crop(frame)
+
+        assert self.eye_detector is not None
+        assert self.eye_detector_input_size is not None
+
+        detection_width, detection_height = self.eye_detector_input_size
+        detection_scale = detection_width / width
+
+        detection_frame = cv2.resize(
+            frame,
+            (detection_width, detection_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+        _, faces = self.eye_detector.detect(detection_frame)
+
+        if faces is None:
+            if self.displayed_crop_top is None:
+                return self.center_square_crop(frame)
+
+            crop_top = self.displayed_crop_top
+            crop_top = max(
+                0,
+                min(crop_top, height - crop_size),
+            )
+
+            return frame[
+                crop_top : crop_top + crop_size,
+                0:crop_size,
+            ]
+
+        face = max(
+            faces,
+            key=lambda f: f[2] * f[3],
+        )
+
+        # YuNet landmarks:
+        # right_eye_x, right_eye_y,
+        # left_eye_x, left_eye_y,
+        # nose_x, nose_y,
+        # right_mouth_x, right_mouth_y,
+        # left_mouth_x, left_mouth_y
+        right_eye = face[4:6]
+        left_eye = face[6:8]
+
+        eye_y_detection = (
+            right_eye[1] + left_eye[1]
+        ) / 2.0
+
+        current_eye_y = eye_y_detection / detection_scale
+
+        if self.smoothed_eye_y is None:
+            self.smoothed_eye_y = current_eye_y
+
+        delta = abs(current_eye_y - self.smoothed_eye_y)
+
+        if delta > eye_crop.large_motion_threshold:
+            alpha = eye_crop.smoothing_alpha_large
+        else:
+            alpha = eye_crop.smoothing_alpha_small
+
+        self.smoothed_eye_y = (
+            alpha * current_eye_y
+            + (1.0 - alpha) * self.smoothed_eye_y
+        )
+
+        desired_eye_y = (
+            eye_crop.desired_eye_y_fraction * crop_size
+        )
+
+        new_crop_top = int(round(
+            self.smoothed_eye_y - desired_eye_y
+        ))
+
+        new_crop_top = max(
+            0,
+            min(new_crop_top, height - crop_size),
+        )
+
+        if self.displayed_crop_top is None:
+            self.displayed_crop_top = new_crop_top
+
+        if abs(new_crop_top - self.displayed_crop_top) > eye_crop.crop_deadband:
+            self.displayed_crop_top = new_crop_top
+
+        return frame[
+            self.displayed_crop_top:
+            self.displayed_crop_top + crop_size,
+            0:crop_size,
+        ]
+
     def resize_image_to_fit(
         self,
         image: Image.Image,
@@ -562,6 +742,7 @@ class HeadshotKiosk:
         self.current_uid = None
         self.uid_buffer = ""
         self.captured_frame = None
+        self.reset_eye_crop_state()
 
         self.preview_countdown_label.place_forget()
         self.message_label.config(text=self.config.text.idle_message)
@@ -574,6 +755,7 @@ class HeadshotKiosk:
 
         self.state = KioskState.PREVIEW
         self.captured_frame = None
+        self.reset_eye_crop_state()
 
         self.preview_countdown_label.place_forget()
         self.message_label.config(text=self.config.text.preview_message)
@@ -677,12 +859,7 @@ class HeadshotKiosk:
         self.flash_preview()
         self.play_shutter_sound()
 
-        if self.config.square_output:
-            self.captured_frame = self.center_square_crop(
-                self.current_frame
-            ).copy()
-        else:
-            self.captured_frame = self.current_frame.copy()
+        self.captured_frame = self.current_frame.copy()
 
         self.state = KioskState.REVIEW
 
@@ -784,6 +961,10 @@ class HeadshotKiosk:
 
         if ret:
             frame = self.transform_frame(frame)
+
+            if self.config.square_output:
+                frame = self.eye_square_crop(frame)
+
             self.current_frame = frame
 
             if (
@@ -793,9 +974,6 @@ class HeadshotKiosk:
                 display_frame = self.captured_frame
             else:
                 display_frame = frame
-
-            if self.config.square_output:
-                display_frame = self.center_square_crop(display_frame)
 
             rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(rgb_frame)
