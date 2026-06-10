@@ -41,6 +41,17 @@ fps = 30
 rotation_degrees = 0
 mirror_horizontally = true
 
+[email]
+enabled = false
+to_address = "recipient@example.com"
+from_address = "sender@example.com"
+smtp_server = "smtp.example.com"
+smtp_port = 25
+
+#
+# YOU SHOULD NOT HAVE TO CHANGE ANYTHING BEYOND THIS POINT
+#
+
 [eye_crop]
 enabled = true
 model_path = "face_detection_yunet_2023mar.onnx"
@@ -51,17 +62,6 @@ smoothing_alpha_small = 0.10
 smoothing_alpha_large = 0.50
 large_motion_threshold = 80.0
 crop_deadband = 6
-
-[email]
-enabled = false
-to_address = "cnspci@rit.edu"
-from_address = "cnspci@rit.edu"
-smtp_server = "mail.cis.rit.edu"
-smtp_port = 25
-
-#
-# YOU SHOULD NOT HAVE TO CHANGE ANYTHING BEYOND THIS POINT
-#
 
 [ui]
 background_color = "black"
