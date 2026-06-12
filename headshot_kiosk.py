@@ -888,9 +888,6 @@ class HeadshotKiosk:
 
         self.clear_buttons()
 
-
-
-
     def start_preview_state(self) -> None:
         assert self.message_label is not None
         assert self.preview_countdown_label is not None
@@ -901,19 +898,21 @@ class HeadshotKiosk:
 
         self.preview_countdown_label.place_forget()
 
-        if self.current_user is not None:
-            first_name = self.current_user.first_name
+        first_name = (
+            self.current_user.first_name
+            if self.current_user is not None
+            else ""
+        )
 
-            self.message_label.config(
-                text=(
-                    f"Hi\n{first_name}\n\n"
-                    f"{self.config.text.preview_message}"
-                )
+        message = self.config.text.preview_message
+
+        if first_name:
+            message = (
+                f"Hi\n{first_name}\n\n"
+                f"{message}"
             )
-        else:
-            self.message_label.config(
-                text=self.config.text.preview_message
-            )
+
+        self.message_label.config(text=message)
 
         self.clear_buttons()
 
