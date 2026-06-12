@@ -9,4 +9,6 @@ dist/
 
 venv/
 
+config_operational.toml
+
 headshots/

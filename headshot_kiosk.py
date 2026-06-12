@@ -126,13 +126,15 @@ import tomllib
 from datetime import datetime
 from email.message import EmailMessage
 from enum import StrEnum
+from ldap3 import Server, Connection, ALL
+from ldap3.core.exceptions import LDAPException
 from pathlib import Path
 from typing import Any, Callable, Literal
 
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -190,9 +192,58 @@ class EmailConfig(BaseModel):
 
     enabled: bool
     to_address: EmailStr
+    bcc_address: EmailStr | None = None
     from_address: EmailStr
     smtp_server: str
     smtp_port: int
+
+    @field_validator("bcc_address", mode="before")
+    @classmethod
+    def empty_bcc_address_to_none(cls, value: object) -> object:
+        if value == "":
+            return None
+
+        return value
+
+
+class LdapConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+    server: str
+    port: int
+    use_ssl: bool
+    bind_dn: str
+    password: str
+    search_base: str
+    id_attribute: str
+    attributes: list[str]
+    debug_first_name: str
+    debug_username: str
+    debug_email: EmailStr
+
+
+class UserRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    rit_id: str
+    mail: str | None = None
+    cn: str | None = None
+    sn: str | None = None
+    uid: str | None = None
+    given_name: str | None = None
+
+    @property
+    def first_name(self) -> str:
+        return self.given_name or ""
+
+    @property
+    def username(self) -> str:
+        return self.uid or self.rit_id
+
+    @property
+    def email_address(self) -> str | None:
+        return self.mail
 
 
 class UiConfig(BaseModel):
@@ -253,6 +304,7 @@ class HeadshotConfig(BaseModel):
     image_transform: ImageTransformConfig
     eye_crop: EyeCropConfig
     email: EmailConfig
+    ldap: LdapConfig
     ui: UiConfig
     text: TextConfig
     colors: ColorConfig
@@ -265,6 +317,7 @@ class HeadshotConfig(BaseModel):
     countdown_beep_enabled: bool
     countdown_sound_file: str
     shutter_sound_file: str
+    instruction_sound_file: str
     flash_duration_ms: int
     video_update_interval_ms: int
     countdown_update_interval_ms: int
@@ -274,14 +327,14 @@ class HeadshotConfig(BaseModel):
     post_accept_reset_ms: int
 
     uid_length: int
-    debug_card_swipe: str
+    debug_card_input: str
 
     output_dir: Path
 
     @computed_field
     @property
     def accepted_dir(self) -> Path:
-        return self.output_dir / "accepted"
+        return self.output_dir
 
 
 class HeadshotKiosk:
@@ -301,6 +354,7 @@ class HeadshotKiosk:
         self.displayed_crop_top: int | None = None
 
         self.current_uid: str | None = None
+        self.current_user: UserRecord | None = None
         self.uid_buffer: str = ""
         self.countdown_start: float = 0.0
         self.last_beep_remaining: int | None = None
@@ -344,7 +398,9 @@ class HeadshotKiosk:
         self.preview_window.title(self.config.text.preview_window_title)
 
         if self.config.window.debug_single_screen_mode:
-            self.preview_window.geometry(self.config.window.debug_preview_geometry)
+            self.preview_window.geometry(
+                self.config.window.debug_preview_geometry
+            )
         else:
             self.preview_window.geometry(self.config.window.preview_geometry)
             self.preview_window.attributes("-fullscreen", True)
@@ -375,7 +431,7 @@ class HeadshotKiosk:
         self.cap.set(cv2.CAP_PROP_FPS, camera.fps)
 
         if not self.cap.isOpened():
-            raise RuntimeError(f"Could not open camera index {camera.index}.")
+            raise RuntimeError(f"Could not open camera index {camera.index}")
 
     def setup_widgets(self) -> None:
         assert self.preview_window is not None
@@ -447,13 +503,24 @@ class HeadshotKiosk:
 
         return ("aplay", str(sound_path))
 
-    def extract_uid_from_card_swipe(self, raw_swipe: str) -> str | None:
-        match = re.search(rf";(\d{{{self.config.uid_length}}})=", raw_swipe)
+    def extract_uid_from_card_input(self, raw_input: str) -> str | None:
+        raw_input = raw_input.strip()
 
-        if match is None:
-            return None
+        swipe_match = re.search(
+            rf";(\d{{{self.config.uid_length}}})=\d+\?",
+            raw_input,
+        )
+        if swipe_match is not None:
+            return swipe_match.group(1)
 
-        return match.group(1)
+        tap_match = re.fullmatch(
+            rf"(\d{{{self.config.uid_length}}})0",
+            raw_input,
+        )
+        if tap_match is not None:
+            return tap_match.group(1)
+
+        return None
 
     def handle_keypress(self, event: Any) -> None:
         if event.keysym == "Escape":
@@ -461,7 +528,9 @@ class HeadshotKiosk:
             return
 
         if isinstance(event.char, str) and event.char.lower() == "u":
-            uid = self.extract_uid_from_card_swipe(self.config.debug_card_swipe)
+            uid = self.extract_uid_from_card_input(
+                self.config.debug_card_input
+            )
 
             if uid is not None:
                 self.start_session_with_uid(uid)
@@ -474,22 +543,96 @@ class HeadshotKiosk:
         if isinstance(event.char, str) and event.char:
             self.uid_buffer += event.char
 
-            if event.char == "?":
-                uid = self.extract_uid_from_card_swipe(self.uid_buffer)
+            uid = self.extract_uid_from_card_input(self.uid_buffer)
+
+            if uid is not None:
+                self.uid_buffer = ""
+                self.start_session_with_uid(uid)
+                return
+
+            if len(self.uid_buffer) > self.config.uid_length + 8:
                 self.uid_buffer = ""
 
-                if uid is not None:
-                    self.start_session_with_uid(uid)
-
         elif event.keysym in {"Return", "KP_Enter"}:
-            uid = self.extract_uid_from_card_swipe(self.uid_buffer)
+            uid = self.extract_uid_from_card_input(self.uid_buffer)
             self.uid_buffer = ""
 
             if uid is not None:
                 self.start_session_with_uid(uid)
+                return
+
+    def lookup_user_record(self, rit_id: str) -> UserRecord:
+        ldap = self.config.ldap
+
+        debug_id = self.extract_uid_from_card_input(
+            self.config.debug_card_input
+        )
+
+        if rit_id == debug_id:
+            return UserRecord(
+                rit_id=rit_id,
+                mail=str(ldap.debug_email),
+                cn=ldap.debug_first_name,
+                uid=ldap.debug_username,
+                given_name=ldap.debug_first_name,
+                sn=None,
+            )
+
+        if not ldap.enabled:
+            return UserRecord(rit_id=rit_id)
+
+        server = Server(
+            ldap.server,
+            port=ldap.port,
+            use_ssl=ldap.use_ssl,
+            get_info=ALL,
+        )
+
+        search_filter = f"({ldap.id_attribute}={rit_id})"
+
+        try:
+            conn = Connection(
+                server,
+                user=ldap.bind_dn,
+                password=ldap.password,
+                auto_bind=True,
+            )
+
+            conn.search(
+                search_base=ldap.search_base,
+                search_filter=search_filter,
+                attributes=ldap.attributes,
+            )
+
+            if not conn.entries:
+                conn.unbind()
+                return UserRecord(rit_id=rit_id)
+
+            entry = conn.entries[0]
+
+            record = UserRecord(
+                rit_id=rit_id,
+                mail=entry["mail"].value if "mail" in entry else None,
+                cn=entry["cn"].value if "cn" in entry else None,
+                sn=entry["sn"].value if "sn" in entry else None,
+                uid=entry["uid"].value if "uid" in entry else None,
+                given_name=(
+                    entry["givenName"].value
+                    if "givenName" in entry
+                    else None
+                ),
+            )
+
+            conn.unbind()
+            return record
+
+        except LDAPException as exc:
+            print(f"LDAP lookup failed for {rit_id}: {exc}")
+            return UserRecord(rit_id=rit_id)
 
     def start_session_with_uid(self, uid: str) -> None:
         self.current_uid = uid
+        self.current_user = self.lookup_user_record(uid)
         self.uid_buffer = ""
 
         self.start_preview_state()
@@ -626,12 +769,6 @@ class HeadshotKiosk:
             key=lambda f: f[2] * f[3],
         )
 
-        # YuNet landmarks:
-        # right_eye_x, right_eye_y,
-        # left_eye_x, left_eye_y,
-        # nose_x, nose_y,
-        # right_mouth_x, right_mouth_y,
-        # left_mouth_x, left_mouth_y
         right_eye = face[4:6]
         left_eye = face[6:8]
 
@@ -741,6 +878,7 @@ class HeadshotKiosk:
         self.state = KioskState.IDLE
         self.current_uid = None
         self.uid_buffer = ""
+        self.current_user = None
         self.captured_frame = None
         self.reset_eye_crop_state()
 
@@ -748,6 +886,9 @@ class HeadshotKiosk:
         self.message_label.config(text=self.config.text.idle_message)
 
         self.clear_buttons()
+
+
+
 
     def start_preview_state(self) -> None:
         assert self.message_label is not None
@@ -758,13 +899,26 @@ class HeadshotKiosk:
         self.reset_eye_crop_state()
 
         self.preview_countdown_label.place_forget()
-        self.message_label.config(text=self.config.text.preview_message)
+
+        if self.current_user is not None:
+            first_name = self.current_user.first_name
+
+            self.message_label.config(
+                text=(
+                    f"Hi\n{first_name}\n\n"
+                    f"{self.config.text.preview_message}"
+                )
+            )
+        else:
+            self.message_label.config(
+                text=self.config.text.preview_message
+            )
 
         self.clear_buttons()
 
         self.make_button(
             self.config.text.take_photo_button,
-            self.start_countdown_state,
+            self.play_instruction_sound_then_countdown,
             self.config.colors.take_photo_button,
         ).pack(pady=self.config.ui.button_pady)
 
@@ -773,6 +927,36 @@ class HeadshotKiosk:
             self.set_idle_state,
             self.config.colors.cancel_button,
         ).pack(pady=self.config.ui.button_pady)
+
+    def play_instruction_sound_then_countdown(self) -> None:
+        command = self.build_sound_command(
+            self.config.instruction_sound_file
+        )
+
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            self.start_countdown_state()
+            return
+
+        self.wait_for_instruction_sound(process)
+
+    def wait_for_instruction_sound(
+        self,
+        process: subprocess.Popen[Any],
+    ) -> None:
+        if process.poll() is None:
+            self.control_window.after(
+                100,
+                lambda: self.wait_for_instruction_sound(process),
+            )
+            return
+
+        self.start_countdown_state()
 
     def start_countdown_state(self) -> None:
         self.state = KioskState.COUNTDOWN
@@ -896,8 +1080,15 @@ class HeadshotKiosk:
             return
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        uid = self.current_uid or "unknown"
-        image_path = self.config.accepted_dir / f"headshot_{uid}_{timestamp}.jpg"
+
+        username = (
+            self.current_user.username
+            if self.current_user is not None
+            else self.current_uid or "unknown"
+        )
+
+        image_path = \
+            self.config.accepted_dir / f"headshot_{username}_{timestamp}.jpg"
 
         success = cv2.imwrite(str(image_path), self.captured_frame)
 
@@ -912,7 +1103,9 @@ class HeadshotKiosk:
         if self.config.email.enabled:
             try:
                 self.email_image(image_path)
-                self.message_label.config(text=self.config.text.submitted_message)
+                self.message_label.config(
+                    text=self.config.text.submitted_message
+                )
             except Exception as exc:
                 self.message_label.config(
                     text=f"Saved, but email failed:\n{exc}"
@@ -927,18 +1120,47 @@ class HeadshotKiosk:
         )
 
     def email_image(self, image_path: Path) -> None:
-        uid = self.current_uid or "unknown"
         email = self.config.email
+
+        uid = self.current_uid or "unknown"
+
+        username = (
+            self.current_user.username
+            if self.current_user is not None
+            else uid
+        )
+
+        recipient = (
+            self.current_user.email_address
+            if (
+                self.current_user is not None
+                and self.current_user.email_address is not None
+            )
+            else str(email.to_address)
+        )
+
+        full_name = (
+            self.current_user.cn
+            if (
+                self.current_user is not None
+                and self.current_user.cn is not None
+            )
+            else "Unknown"
+        )
 
         msg = EmailMessage()
         msg["Subject"] = self.config.text.email_subject
         msg["From"] = str(email.from_address)
-        msg["To"] = str(email.to_address)
+        msg["To"] = recipient
+        if email.bcc_address is not None:
+            msg["Bcc"] = str(email.bcc_address)
 
         msg.set_content(
             f"{self.config.text.email_body_intro}\n\n"
+            f"Name: {full_name}\n"
+            f"Username: {username}\n"
             f"UID: {uid}\n"
-            f"File: {image_path.name}\n"
+            f"File: {image_path.name}\n\n"
         )
 
         with image_path.open("rb") as f:

@@ -13,6 +13,7 @@ preview_countdown_font_size = 260
 countdown_beep_enabled = true
 countdown_sound_file = "beep.wav"
 shutter_sound_file = "camera_shutter.wav"
+instruction_sound_file = "look_at_camera.wav"
 flash_duration_ms = 150
 video_update_interval_ms = 20
 countdown_update_interval_ms = 100
@@ -21,7 +22,7 @@ no_image_retry_ms = 2000
 save_error_reset_ms = 3000
 post_accept_reset_ms = 3000
 uid_length = 9
-debug_card_swipe = ";000000000=0000?"
+debug_card_input = ";000000000=0000?"
 output_dir = "headshots"
 
 [window]
@@ -44,9 +45,24 @@ mirror_horizontally = true
 [email]
 enabled = false
 to_address = "recipient@example.com"
+bcc_address = ""
 from_address = "sender@example.com"
 smtp_server = "smtp.example.com"
 smtp_port = 25
+
+[ldap]
+enabled = false
+server = "ldap.example.com"
+port = 636
+use_ssl = true
+bind_dn = "uid=<ldap authorized user>,ou=People,dc=<organization>,dc=<domain type>"
+password = "<ldap authorized user's password (protect this file properly)>"
+search_base = "ou=People,dc=<organization>,dc=<domain type>"
+id_attribute = "ritId"
+attributes = ["mail", "cn", "sn", "uid", "givenName"]
+debug_first_name = "Debug User"
+debug_username = "debug_user"
+debug_email = "debug_user@example.com"
 
 #
 # YOU SHOULD NOT HAVE TO CHANGE ANYTHING BEYOND THIS POINT
@@ -82,20 +98,20 @@ button_pady = 10
 [text]
 control_window_title = "Headshot Controls"
 preview_window_title = "Headshot Preview"
-idle_message = "Swipe ID Card\nto Begin"
+idle_message = "Present ID card\nto begin"
 preview_message = "Position yourself,\nthen touch\n'Take Photo'"
-camera_error_message = "Camera error.\nTry again."
+camera_error_message = "Camera error\n\nPlease try again"
 review_message = "Review your\nheadshot"
-no_image_message = "No image captured.\nTry again."
-save_error_message = "Could not\nsave image."
-submitted_message = "Submitted.\nThank you!!!"
+no_image_message = "No image captured\n\nPlease try again"
+save_error_message = "Could not\nsave image"
+submitted_message = "Submitted\n\nThank you!!!"
 saved_message = "Saved"
 take_photo_button = "Take Photo"
 accept_button = "Accept"
 retake_button = "Retake"
 cancel_button = "Cancel"
 email_subject = "Department Headshot"
-email_body_intro = "A new headshot was accepted."
+email_body_intro = "Here is your new headshot photograph."
 
 [colors]
 take_photo_button = "#008844"
