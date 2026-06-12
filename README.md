@@ -275,14 +275,14 @@ debug_card_input = ";000000000=0000?"
 Accepted images are saved to:
 
 ```text
-headshots/accepted/
+headshots/
 ```
 
-```markdown
 Each accepted image filename includes the user's username and a timestamp:
 
 ```text
 headshot_<username>_<timestamp>.jpg
+```
 
 ## Email Delivery
 
