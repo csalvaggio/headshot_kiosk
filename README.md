@@ -1,8 +1,10 @@
 # Headshot Kiosk
 
 A Python-based touchscreen headshot kiosk for collecting standardized
-portrait images using a USB camera, card-swipe identification, live
-preview, countdown capture, image review, and optional email delivery.
+portrait images using a USB camera, card-based user identification,
+LDAP directory integration, live preview, spoken instructions,
+countdown capture, image review, automated file naming, and optional
+email delivery.
 
 The application is intended for unattended or semi-attended headshot
 collection workflows where users identify themselves with an ID card,
@@ -11,20 +13,113 @@ and either accept or retake the photo.
 
 ## Features
 
-- Touchscreen-friendly kiosk interface
-- Full-screen live camera preview
-- Separate control and preview windows
-- ID card swipe support
-- Configurable countdown timer
-- Countdown and shutter sounds
-- Image rotation and mirroring
-- Optional square output crop
-- Face/eye-aware vertical crop adjustment using OpenCV YuNet
-- Review, accept, retake, and cancel workflow
-- Local image saving
-- Optional SMTP email delivery
-- TOML-based configuration
-- Debug single-screen mode for development and testing
+- **Dual-screen kiosk interface**
+  - Touchscreen control interface for the user
+  - Independent live preview display on a large monitor
+
+- **Touchscreen-optimized user interface**
+  - Designed for keyboard-free operation
+  - Large buttons suitable for public kiosk environments
+
+- **Card-based user identification**
+  - Supports ISO/IEC 7813 magnetic stripe card readers
+  - Supports ELATEC-style tap readers that emulate keyboard input
+  - Hidden debug mode for operation without an ID card
+
+- **LDAP integration**
+  - Automatic user lookup from university directory services
+  - Retrieves user name, username, and email address
+  - Personalized user greeting
+  - Automatic delivery to the user's email address
+
+- **Live camera preview**
+  - Full-screen preview mode
+  - Optional automatic scaling to fit display resolution
+  - Optional portrait-mode camera rotation
+  - Optional image mirroring
+
+- **Intelligent framing**
+  - Optional square-format preview and capture
+  - Optional eye-position-based automatic framing
+  - Automatic accommodation of users with varying heights
+  - Temporal smoothing for stable framing
+
+- **Guided image acquisition**
+  - Configurable spoken instructions
+  - Audible countdown cues
+  - Large on-screen countdown timer
+  - Optional countdown visibility suppression immediately before capture
+  - Simulated camera flash effect
+  - Camera shutter sound effect
+
+- **Image review workflow**
+  - Accept image
+  - Retake image
+  - Cancel session
+
+- **Automated file management**
+  - Timestamped image naming
+  - Username-based file naming
+  - Automatic image archival
+
+- **Email delivery**
+  - Automatic delivery to identified user
+  - Optional BCC copy for administrators
+  - Image attached directly to email
+
+- **Institutional deployment ready**
+  - Automated user identification and file naming
+  - Self-service operation requiring minimal staff assistance
+  - Suitable for employee, faculty, student, and visitor headshot collection
+
+- **Configuration-driven architecture**
+  - Extensive TOML-based configuration
+  - No code modifications required for deployment customization
+
+- **Cross-platform support**
+  - Raspberry Pi OS
+  - Linux
+  - macOS
+
+
+## Typical Workflow
+
+1. User presents an ID card.
+   - Magnetic stripe card readers are supported.
+   - ELATEC-style tap readers that emulate keyboard input are supported.
+
+2. The kiosk identifies the user.
+   - A university LDAP directory is queried.
+   - User name, username, and email address are retrieved.
+
+3. A personalized greeting is displayed.
+
+4. The user positions themselves using the live preview monitor.
+
+5. The user presses **Take Photo**.
+
+6. Spoken instructions are played.
+
+7. A countdown begins.
+   - Audible countdown beeps are played.
+   - The countdown is displayed on both screens.
+   - Optional countdown hiding can be enabled immediately before capture.
+
+8. The image is captured.
+   - A flash effect is displayed.
+   - A camera shutter sound is played.
+
+9. The user reviews the image.
+   - Accept
+   - Retake
+   - Cancel
+
+10. Accepted images are:
+    - Saved locally
+    - Named using the user's username and a timestamp
+    - Optionally emailed automatically to the identified user
+    - Optionally BCC'd to an administrator
+
 
 ## Repository Contents
 
@@ -36,6 +131,7 @@ and either accept or retake the photo.
 | `requirements.txt` | Python package dependencies |
 | `beep.wav` | Countdown sound |
 | `camera_shutter.wav` | Shutter sound |
+| `look_at_camera.wav` | Spoken instructions played before image capture |
 | `face_detection_yunet_2023mar.onnx` | OpenCV YuNet face detection model |
 
 ## Requirements
@@ -55,6 +151,7 @@ The main third-party dependencies are:
 * `Pillow`
 * `pydantic`
 * `email-validator`
+* `ldap3`
 
 On Linux or Raspberry Pi OS, you may also need Tkinter and
 camera-related system packages:
@@ -113,6 +210,7 @@ Important configuration sections include:
 * `[camera]` — camera index, resolution, and frame rate
 * `[image_transform]` — rotation and mirroring
 * `[eye_crop]` — face/eye-based square crop behavior
+* `[ldap]` — user identification and directory lookup
 * `[email]` — optional SMTP email delivery
 * `[ui]` — fonts, colors, button sizes, and layout
 * `[text]` — user-facing messages and button labels
@@ -136,17 +234,40 @@ rotation_degrees = 270
 mirror_horizontally = true
 ```
 
-## Card Swipe Workflow
+## Card Reader Support
 
-The kiosk is designed to begin a session when an ID card is swiped.
-The software extracts a numeric UID from the raw swipe string using the
-configured UID length.
+The kiosk supports two common keyboard-emulating card reader formats.
 
-For development and testing, the `u` key can be used to simulate a card
-swipe using the value in:
+### Magnetic Stripe Reader
+
+Example Track 2 input:
+
+```text
+;514006534=0047?
+```
+
+The kiosk automatically extracts the configured 9-digit identifier.
+
+### ELATEC Tap Reader
+
+Example input:
+
+```text
+5140065340
+```
+
+The kiosk automatically removes the trailing digit and extracts the
+configured 9-digit identifier.
+
+No reader-specific configuration is required.
+
+### Debug Mode
+
+For development and testing, the `u` key can be used to simulate card
+presentation using the value configured in:
 
 ```toml
-debug_card_swipe = ";000000000=0000?"
+debug_card_input = ";000000000=0000?"
 ```
 
 ## Output Images
@@ -157,11 +278,11 @@ Accepted images are saved to:
 headshots/accepted/
 ```
 
-Each accepted image filename includes the UID and timestamp:
+```markdown
+Each accepted image filename includes the user's username and a timestamp:
 
 ```text
-headshot_<uid>_<timestamp>.jpg
-```
+headshot_<username>_<timestamp>.jpg
 
 ## Email Delivery
 
@@ -176,8 +297,29 @@ smtp_server = "smtp.example.com"
 smtp_port = 25
 ```
 
-When enabled, accepted images are attached to an email and sent through
-the configured SMTP server.
+When enabled, accepted images are attached to an email and delivered
+through the configured SMTP server.
+
+If LDAP integration is enabled, the image is automatically delivered to
+the email address associated with the identified user. An optional BCC
+recipient may also be configured for administrative record keeping.
+
+## LDAP Integration
+
+The kiosk can query a directory service after card presentation to
+retrieve:
+
+- Full name (`cn`)
+- First name (`givenName`)
+- Last name (`sn`)
+- Username (`uid`)
+- Email address (`mail`)
+
+This information is used to:
+
+- Personalize the user interface
+- Generate username-based filenames
+- Automatically address email delivery
 
 ## Raspberry Pi Notes
 

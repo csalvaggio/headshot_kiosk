@@ -12,7 +12,7 @@ to the Python standard library.
 
 Required third-party packages:
 
-    pip install opencv-python numpy Pillow pydantic email-validator
+    pip install opencv-python numpy Pillow pydantic email-validator ldap3
 
 These provide:
 
@@ -21,6 +21,7 @@ These provide:
     Pillow          - Tkinter-compatible image handling
     pydantic        - Data validation and typed configuration models
     email-validator - Validation backend required by pydantic.EmailStr
+    ldap3           - LDAP directory queries for user account information
 
 Python Version Requirements
 ---------------------------
@@ -110,7 +111,7 @@ Creating an isolated Python virtual environment is strongly recommended:
     source venv/bin/activate
 
     pip install --upgrade pip
-    pip install opencv-python numpy Pillow pydantic email-validator
+    pip install opencv-python numpy Pillow pydantic email-validator ldap3
 """
 
 from __future__ import annotations
