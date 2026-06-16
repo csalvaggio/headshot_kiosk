@@ -1079,7 +1079,8 @@ class HeadshotKiosk:
             )
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Use a filename safe form of an ISO-8601 date/time string
+        timestamp = datetime.now().astimezone().strftime("%Y-%m-%dT%H%M%S%z")
 
         username = (
             self.current_user.username
@@ -1088,7 +1089,7 @@ class HeadshotKiosk:
         )
 
         image_path = \
-            self.config.accepted_dir / f"headshot_{username}_{timestamp}.jpg"
+            self.config.accepted_dir / f"{timestamp}_{username}.jpg"
 
         success = cv2.imwrite(str(image_path), self.captured_frame)
 
