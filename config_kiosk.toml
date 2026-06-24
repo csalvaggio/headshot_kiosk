@@ -25,6 +25,7 @@ uid_length = 9
 debug_card_input = ";000000000=0000?"
 output_dir = "headshots"
 shutdown_grace_period_ms = 10000
+shutdown_authorization_timeout_ms = 30000
 
 [window]
 debug_single_screen_mode = false

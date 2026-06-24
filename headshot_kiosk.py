@@ -350,6 +350,7 @@ class HeadshotConfig(BaseModel):
     debug_card_input: str
 
     shutdown_grace_period_ms: int
+    shutdown_authorization_timeout_ms: int
 
     output_dir: Path
 
@@ -391,9 +392,10 @@ class HeadshotKiosk:
         self.button_frame: tk.Frame | None = None
         self.preview_countdown_label: tk.Label | None = None
         self.flash_overlay: tk.Frame | None = None
-        self.shutdown_button: tk.Button | None = None
 
+        self.shutdown_button: tk.Button | None = None
         self.pending_shutdown_after_id: str | None = None
+        self.shutdown_authorization_after_id: str | None = None
 
         self.config.accepted_dir.mkdir(parents=True, exist_ok=True)
 
@@ -542,6 +544,12 @@ class HeadshotKiosk:
         if self.shutdown_button is not None:
             self.shutdown_button.place_forget()
 
+    def shutdown_authorization_timeout(self) -> None:
+        self.shutdown_authorization_after_id = None
+
+        if self.state is KioskState.SHUTDOWN_AUTH:
+            self.set_idle_state()
+
     def start_shutdown_authorization(self) -> None:
         assert self.message_label is not None
         assert self.preview_countdown_label is not None
@@ -569,7 +577,20 @@ class HeadshotKiosk:
 
         self.control_window.focus_force()
 
+        self.shutdown_authorization_after_id = (
+            self.control_window.after(
+                self.config.shutdown_authorization_timeout_ms,
+                self.shutdown_authorization_timeout,
+            )
+        )
+
     def authorize_shutdown_uid(self, uid: str) -> None:
+        if self.shutdown_authorization_after_id is not None:
+            self.control_window.after_cancel(
+                self.shutdown_authorization_after_id
+            )
+            self.shutdown_authorization_after_id = None
+
         assert self.message_label is not None
 
         user = self.lookup_user_record(uid)
@@ -1046,6 +1067,12 @@ class HeadshotKiosk:
     def set_idle_state(self) -> None:
         assert self.message_label is not None
         assert self.preview_countdown_label is not None
+
+        if self.shutdown_authorization_after_id is not None:
+            self.control_window.after_cancel(
+                self.shutdown_authorization_after_id
+            )
+            self.shutdown_authorization_after_id = None
 
         self.state = KioskState.IDLE
         self.current_uid = None
