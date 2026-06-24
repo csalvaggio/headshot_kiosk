@@ -24,6 +24,7 @@ post_accept_reset_ms = 3000
 uid_length = 9
 debug_card_input = ";000000000=0000?"
 output_dir = "headshots"
+shutdown_grace_period_ms = 10000
 
 [window]
 debug_single_screen_mode = false
@@ -63,6 +64,11 @@ attributes = ["mail", "cn", "sn", "uid", "givenName"]
 debug_first_name = "Debug User"
 debug_username = "debug_user"
 debug_email = "debug_user@example.com"
+
+[shutdown]
+enabled = false
+authorized_usernames = [""]
+command = ["systemctl", "poweroff"]
 
 #
 # YOU SHOULD NOT HAVE TO CHANGE ANYTHING BEYOND THIS POINT
@@ -112,6 +118,10 @@ retake_button = "Retake"
 cancel_button = "Cancel"
 email_subject = "Department Headshot"
 email_body_intro = "Here is your new headshot photograph."
+shutdown_button = "Shutdown"
+shutdown_prompt_message = "Tap your ID to initiate a system shutdown"
+shutdown_denied_message = "You are not authorized to shut down this kiosk"
+shutdown_authorized_message = "Shutdown authorized, powering off ..."
 
 [colors]
 take_photo_button = "#008844"

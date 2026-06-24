@@ -135,7 +135,13 @@ from typing import Any, Callable, Literal
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    computed_field,
+    field_validator,
+)
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -146,6 +152,7 @@ class KioskState(StrEnum):
     PREVIEW = "preview"
     COUNTDOWN = "countdown"
     REVIEW = "review"
+    SHUTDOWN_AUTH = "shutdown_auth"
 
 
 class WindowConfig(BaseModel):
@@ -203,7 +210,6 @@ class EmailConfig(BaseModel):
     def empty_bcc_address_to_none(cls, value: object) -> object:
         if value == "":
             return None
-
         return value
 
 
@@ -222,6 +228,14 @@ class LdapConfig(BaseModel):
     debug_first_name: str
     debug_username: str
     debug_email: EmailStr
+
+
+class ShutdownConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+    authorized_usernames: list[str]
+    command: tuple[str, ...]
 
 
 class UserRecord(BaseModel):
@@ -285,6 +299,10 @@ class TextConfig(BaseModel):
     cancel_button: str
     email_subject: str
     email_body_intro: str
+    shutdown_button: str
+    shutdown_prompt_message: str
+    shutdown_denied_message: str
+    shutdown_authorized_message: str
 
 
 class ColorConfig(BaseModel):
@@ -306,6 +324,7 @@ class HeadshotConfig(BaseModel):
     eye_crop: EyeCropConfig
     email: EmailConfig
     ldap: LdapConfig
+    shutdown: ShutdownConfig
     ui: UiConfig
     text: TextConfig
     colors: ColorConfig
@@ -329,6 +348,8 @@ class HeadshotConfig(BaseModel):
 
     uid_length: int
     debug_card_input: str
+
+    shutdown_grace_period_ms: int
 
     output_dir: Path
 
@@ -370,6 +391,9 @@ class HeadshotKiosk:
         self.button_frame: tk.Frame | None = None
         self.preview_countdown_label: tk.Label | None = None
         self.flash_overlay: tk.Frame | None = None
+        self.shutdown_button: tk.Button | None = None
+
+        self.pending_shutdown_after_id: str | None = None
 
         self.config.accepted_dir.mkdir(parents=True, exist_ok=True)
 
@@ -399,9 +423,7 @@ class HeadshotKiosk:
         self.preview_window.title(self.config.text.preview_window_title)
 
         if self.config.window.debug_single_screen_mode:
-            self.preview_window.geometry(
-                self.config.window.debug_preview_geometry
-            )
+            self.preview_window.geometry(self.config.window.debug_preview_geometry)
         else:
             self.preview_window.geometry(self.config.window.preview_geometry)
             self.preview_window.attributes("-fullscreen", True)
@@ -487,6 +509,125 @@ class HeadshotKiosk:
         )
         self.button_frame.pack(pady=self.config.ui.button_frame_pady)
 
+        self.shutdown_button = tk.Button(
+            self.control_window,
+            text=self.config.text.shutdown_button,
+            command=self.start_shutdown_authorization,
+            font=(
+                self.config.ui.font_family,
+                max(10, self.config.ui.button_font_size // 2),
+                "bold",
+            ),
+            fg=self.config.ui.foreground_color,
+            bg=self.config.colors.cancel_button,
+            activebackground=self.config.colors.cancel_button,
+            activeforeground=self.config.ui.foreground_color,
+            bd=2,
+        )
+
+    def show_shutdown_button(self) -> None:
+        if (
+            self.shutdown_button is not None
+            and self.config.shutdown.enabled
+        ):
+            self.shutdown_button.place(
+                relx=1.0,
+                rely=1.0,
+                x=-20,
+                y=-40,
+                anchor="se",
+            )
+
+    def hide_shutdown_button(self) -> None:
+        if self.shutdown_button is not None:
+            self.shutdown_button.place_forget()
+
+    def start_shutdown_authorization(self) -> None:
+        assert self.message_label is not None
+        assert self.preview_countdown_label is not None
+
+        self.state = KioskState.SHUTDOWN_AUTH
+        self.uid_buffer = ""
+        self.current_uid = None
+        self.current_user = None
+        self.captured_frame = None
+        self.reset_eye_crop_state()
+
+        self.preview_countdown_label.place_forget()
+        self.clear_buttons()
+        self.hide_shutdown_button()
+
+        self.message_label.config(
+            text=self.config.text.shutdown_prompt_message
+        )
+
+        self.make_button(
+            self.config.text.cancel_button,
+            self.set_idle_state,
+            self.config.colors.cancel_button,
+        ).pack(pady=self.config.ui.button_pady)
+
+        self.control_window.focus_force()
+
+    def authorize_shutdown_uid(self, uid: str) -> None:
+        assert self.message_label is not None
+
+        user = self.lookup_user_record(uid)
+        username = user.username
+
+        authorized_usernames = {
+            name.lower()
+            for name in self.config.shutdown.authorized_usernames
+        }
+
+        if username.lower() in authorized_usernames:
+            self.message_label.config(
+                text=self.config.text.shutdown_authorized_message
+            )
+
+            self.clear_buttons()
+
+            self.make_button(
+                self.config.text.cancel_button,
+                self.cancel_pending_shutdown,
+                self.config.colors.cancel_button,
+            ).pack(pady=self.config.ui.button_pady)
+
+            self.pending_shutdown_after_id = self.control_window.after(
+                self.config.shutdown_grace_period_ms,
+                self.shutdown_system,
+            )
+            return
+
+        self.clear_buttons()
+
+        self.message_label.config(
+            text=self.config.text.shutdown_denied_message
+        )
+
+        self.control_window.after(
+            self.config.post_accept_reset_ms,
+            self.set_idle_state,
+        )
+
+    def cancel_pending_shutdown(self) -> None:
+        if self.pending_shutdown_after_id is not None:
+            self.control_window.after_cancel(
+                self.pending_shutdown_after_id
+            )
+            self.pending_shutdown_after_id = None
+
+        self.set_idle_state()
+
+    def shutdown_system(self) -> None:
+        self.pending_shutdown_after_id = None
+
+        try:
+            subprocess.Popen(self.config.shutdown.command)
+        except OSError as exc:
+            print(f"Shutdown failed: {exc}")
+            self.set_idle_state()
+
     def resolve_sound_path(self, sound_file: str) -> Path:
         path = Path(sound_file)
 
@@ -528,7 +669,37 @@ class HeadshotKiosk:
             self.quit()
             return
 
-        if isinstance(event.char, str) and event.char.lower() == "u":
+        if self.state is KioskState.SHUTDOWN_AUTH:
+            if isinstance(event.char, str) and event.char:
+                if event.char not in "0123456789;=?":
+                    return
+
+                self.uid_buffer += event.char
+
+                uid = self.extract_uid_from_card_input(self.uid_buffer)
+
+                if uid is not None:
+                    self.uid_buffer = ""
+                    self.authorize_shutdown_uid(uid)
+                    return
+
+                if len(self.uid_buffer) > self.config.uid_length + 8:
+                    self.uid_buffer = ""
+
+            elif event.keysym in {"Return", "KP_Enter"}:
+                uid = self.extract_uid_from_card_input(self.uid_buffer)
+                self.uid_buffer = ""
+
+                if uid is not None:
+                    self.authorize_shutdown_uid(uid)
+
+            return
+
+        if (
+            self.state is KioskState.IDLE
+            and isinstance(event.char, str)
+            and event.char.lower() == "u"
+        ):
             uid = self.extract_uid_from_card_input(
                 self.config.debug_card_input
             )
@@ -887,6 +1058,7 @@ class HeadshotKiosk:
         self.message_label.config(text=self.config.text.idle_message)
 
         self.clear_buttons()
+        self.show_shutdown_button()
 
     def start_preview_state(self) -> None:
         assert self.message_label is not None
@@ -895,6 +1067,7 @@ class HeadshotKiosk:
         self.state = KioskState.PREVIEW
         self.captured_frame = None
         self.reset_eye_crop_state()
+        self.hide_shutdown_button()
 
         self.preview_countdown_label.place_forget()
 
@@ -961,6 +1134,7 @@ class HeadshotKiosk:
     def start_countdown_state(self) -> None:
         self.state = KioskState.COUNTDOWN
         self.clear_buttons()
+        self.hide_shutdown_button()
         self.countdown_start = time.monotonic()
         self.last_beep_remaining = None
         self.run_countdown()
@@ -1040,6 +1214,7 @@ class HeadshotKiosk:
             )
             return
 
+        self.hide_shutdown_button()
         self.flash_preview()
         self.play_shutter_sound()
 
@@ -1079,7 +1254,6 @@ class HeadshotKiosk:
             )
             return
 
-        # Use a filename safe form of an ISO-8601 date/time string
         timestamp = datetime.now().astimezone().strftime("%Y-%m-%dT%H%M%S%z")
 
         username = (
@@ -1088,8 +1262,7 @@ class HeadshotKiosk:
             else self.current_uid or "unknown"
         )
 
-        image_path = \
-            self.config.accepted_dir / f"{timestamp}_{username}.jpg"
+        image_path = self.config.accepted_dir / f"{timestamp}_{username}.jpg"
 
         success = cv2.imwrite(str(image_path), self.captured_frame)
 
