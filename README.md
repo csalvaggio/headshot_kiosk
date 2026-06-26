@@ -3,8 +3,8 @@
 A Python-based touchscreen headshot kiosk for collecting standardized
 portrait images using a USB camera, card-based user identification,
 LDAP directory integration, live preview, spoken instructions,
-countdown capture, image review, automated file naming, and optional
-email delivery.
+countdown capture, image review, automated file naming, optional
+motion-based display management, and optional email delivery.
 
 The application is intended for unattended or semi-attended headshot
 collection workflows where users identify themselves with an ID card,
@@ -67,6 +67,11 @@ and either accept or retake the photo.
   - Optional BCC copy for administrators
   - Image attached directly to email
 
+- **Kiosk appliance features**
+  - Automatic display blanking after configurable inactivity periods
+  - Motion-based display wake functionality
+  - Optional card-authorized system shutdown
+
 - **Institutional deployment ready**
   - Automated user identification and file naming
   - Self-service operation requiring minimal staff assistance
@@ -74,13 +79,14 @@ and either accept or retake the photo.
 
 - **Configuration-driven architecture**
   - Extensive TOML-based configuration
+  - Motion wake and idle blanking behavior configurable from TOML
+  - Authorized shutdown users configurable without code changes
   - No code modifications required for deployment customization
 
 - **Cross-platform support**
   - Raspberry Pi OS
   - Linux
   - macOS
-
 
 ## Typical Workflow
 
@@ -94,32 +100,35 @@ and either accept or retake the photo.
 
 3. A personalized greeting is displayed.
 
-4. The user positions themselves using the live preview monitor.
+4. If the kiosk has been idle:
+   - Displays may have been automatically blanked.
+   - Motion detected by the camera automatically restores the displays.
 
-5. The user presses **Take Photo**.
+5. The user positions themselves using the live preview monitor.
 
-6. Spoken instructions are played.
+6. The user presses **Take Photo**.
 
-7. A countdown begins.
+7. Spoken instructions are played.
+
+8. A countdown begins.
    - Audible countdown beeps are played.
    - The countdown is displayed on both screens.
    - Optional countdown hiding can be enabled immediately before capture.
 
-8. The image is captured.
+9. The image is captured.
    - A flash effect is displayed.
    - A camera shutter sound is played.
 
-9. The user reviews the image.
-   - Accept
-   - Retake
-   - Cancel
+10. The user reviews the image.
+    - Accept
+    - Retake
+    - Cancel
 
-10. Accepted images are:
+11. Accepted images are:
     - Saved locally
     - Named using the user's username and a timestamp
     - Optionally emailed automatically to the identified user
     - Optionally BCC'd to an administrator
-
 
 ## Repository Contents
 
@@ -142,16 +151,16 @@ Python packages are listed in `requirements.txt`:
 
 ```bash
 pip install -r requirements.txt
-````
+```
 
 The main third-party dependencies are:
 
-* `opencv-python`
-* `numpy`
-* `Pillow`
-* `pydantic`
-* `email-validator`
-* `ldap3`
+- `opencv-python`
+- `numpy`
+- `Pillow`
+- `pydantic`
+- `email-validator`
+- `ldap3`
 
 On Linux or Raspberry Pi OS, you may also need Tkinter and
 camera-related system packages:
@@ -206,15 +215,18 @@ file.
 
 Important configuration sections include:
 
-* `[window]` — control and preview window geometry
-* `[camera]` — camera index, resolution, and frame rate
-* `[image_transform]` — rotation and mirroring
-* `[eye_crop]` — face/eye-based square crop behavior
-* `[ldap]` — user identification and directory lookup
-* `[email]` — optional SMTP email delivery
-* `[ui]` — fonts, colors, button sizes, and layout
-* `[text]` — user-facing messages and button labels
-* `[colors]` — button and flash overlay colors
+- `[window]` — control and preview window geometry
+- `[camera]` — camera index, resolution, and frame rate
+- `[image_transform]` — rotation and mirroring
+- `[eye_crop]` — face/eye-based square crop behavior
+- `[ldap]` — user identification and directory lookup
+- `[email]` — optional SMTP email delivery
+- `[idle_blank]` — automatic display blanking
+- `[motion_wake]` — motion-based display wake
+- `[shutdown]` — authorized shutdown configuration
+- `[ui]` — fonts, colors, button sizes, and layout
+- `[text]` — user-facing messages and button labels
+- `[colors]` — button and flash overlay colors
 
 Example camera configuration:
 
@@ -233,6 +245,40 @@ Example image transform configuration:
 rotation_degrees = 270
 mirror_horizontally = true
 ```
+
+## Idle Display Management
+
+For unattended kiosk deployments, displays can optionally be blanked
+after a configurable period of inactivity.
+
+Example:
+
+```toml
+[idle_blank]
+enabled = true
+timeout_seconds = 300
+```
+
+When enabled, the kiosk blanks its displays after the specified period
+of inactivity.
+
+## Motion Wake
+
+The kiosk can automatically restore blanked displays when motion is
+detected within the camera field of view.
+
+Example:
+
+```toml
+[motion_wake]
+enabled = true
+minimum_seconds_between_wakes = 10
+motion_threshold = 20.0
+motion_fraction_threshold = 0.01
+```
+
+This feature reduces display wear and power consumption while preserving
+a responsive user experience.
 
 ## Card Reader Support
 
@@ -270,6 +316,28 @@ presentation using the value configured in:
 debug_card_input = ";000000000=0000?"
 ```
 
+## Authorized Shutdown
+
+The kiosk optionally supports card-authorized system shutdown.
+
+When enabled, only configured users are permitted to initiate an
+operating system shutdown.
+
+Example configuration:
+
+```toml
+[shutdown]
+enabled = true
+authorized_users = ["cnspci", "jdoe"]
+grace_period_seconds = 30
+```
+
+After an authorized card is presented, the kiosk enters a configurable
+grace period before the system shutdown is initiated.
+
+This feature is intended for unattended public deployments where system
+shutdown access should be restricted to kiosk administrators.
+
 ## Output Images
 
 Accepted images are saved to:
@@ -278,7 +346,8 @@ Accepted images are saved to:
 headshots/
 ```
 
-Each accepted image filename includes the user's username and a timestamp:
+Each accepted image filename includes the user's username and a
+timestamp:
 
 ```text
 headshot_<username>_<timestamp>.jpg
@@ -293,16 +362,19 @@ Email delivery can be enabled in the TOML configuration:
 enabled = true
 to_address = "recipient@example.com"
 from_address = "sender@example.com"
+bcc_address = ""
 smtp_server = "smtp.example.com"
 smtp_port = 25
 ```
+
+The optional `bcc_address` field may be used to archive all delivered
+headshots or provide administrative notification copies.
 
 When enabled, accepted images are attached to an email and delivered
 through the configured SMTP server.
 
 If LDAP integration is enabled, the image is automatically delivered to
-the email address associated with the identified user. An optional BCC
-recipient may also be configured for administrative record keeping.
+the email address associated with the identified user.
 
 ## LDAP Integration
 
@@ -335,6 +407,13 @@ v4l2-ctl --list-devices
 v4l2-ctl --list-formats-ext
 ```
 
+For unattended kiosk deployments, it is recommended to:
+
+- Configure automatic application startup at user login.
+- Enable idle display blanking.
+- Enable motion-based display wake.
+- Restrict system shutdown using the authorized shutdown feature.
+
 If camera access fails, check that the user has permission to access
 video devices.
 
@@ -357,15 +436,18 @@ See `LICENSE` for details.
 
 ## Contact
 
-### Author  
+### Author
+
 Carl Salvaggio, Ph.D.  
 Professor of Imaging Science  
 Director, Digital Imaging and Remote Sensing (DIRS) Laboratory
 
 ### E-mail
+
 carl.salvaggio@rit.edu
 
 ### Organization
+
 Chester F. Carlson Center for Imaging Science  
 Rochester Institute of Technology  
 Rochester, New York, 14623  

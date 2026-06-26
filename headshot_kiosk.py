@@ -423,6 +423,7 @@ class HeadshotKiosk:
         self.shutdown_button: tk.Button | None = None
         self.pending_shutdown_after_id: str | None = None
         self.shutdown_authorization_after_id: str | None = None
+        self.shutdown_preview_overlay: tk.Frame | None = None
 
         self.config.accepted_dir.mkdir(parents=True, exist_ok=True)
 
@@ -634,6 +635,7 @@ class HeadshotKiosk:
             )
 
             self.clear_buttons()
+            self.blank_preview_for_shutdown()
 
             self.make_button(
                 self.config.text.cancel_button,
@@ -665,7 +667,32 @@ class HeadshotKiosk:
             )
             self.pending_shutdown_after_id = None
 
+        self.unblank_preview_for_shutdown()
+
         self.set_idle_state()
+
+    def blank_preview_for_shutdown(self) -> None:
+        assert self.preview_window is not None
+
+        if self.shutdown_preview_overlay is not None:
+            return
+
+        self.shutdown_preview_overlay = tk.Frame(
+            self.preview_window,
+            bg="black",
+        )
+        self.shutdown_preview_overlay.place(
+            relx=0,
+            rely=0,
+            relwidth=1,
+            relheight=1,
+        )
+        self.shutdown_preview_overlay.lift()
+
+    def unblank_preview_for_shutdown(self) -> None:
+        if self.shutdown_preview_overlay is not None:
+            self.shutdown_preview_overlay.destroy()
+            self.shutdown_preview_overlay = None
 
     def shutdown_system(self) -> None:
         self.pending_shutdown_after_id = None
@@ -1096,6 +1123,9 @@ class HeadshotKiosk:
     def set_idle_state(self) -> None:
         assert self.message_label is not None
         assert self.preview_countdown_label is not None
+
+        self.unblank_screens()
+        self.unblank_preview_for_shutdown()
 
         if self.shutdown_authorization_after_id is not None:
             self.control_window.after_cancel(
