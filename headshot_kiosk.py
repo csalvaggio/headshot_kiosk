@@ -230,6 +230,23 @@ class LdapConfig(BaseModel):
     debug_email: EmailStr
 
 
+class IdleBlankConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+    timeout_ms: int
+
+
+class MotionActivityConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+    motion_threshold: int
+    activity_pixels_threshold: int
+    wake_pixels_threshold: int
+    minimum_seconds_between_wakes: float
+
+
 class ShutdownConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -324,6 +341,8 @@ class HeadshotConfig(BaseModel):
     eye_crop: EyeCropConfig
     email: EmailConfig
     ldap: LdapConfig
+    motion_wake: MotionActivityConfig
+    idle_blank: IdleBlankConfig
     shutdown: ShutdownConfig
     ui: UiConfig
     text: TextConfig
@@ -392,6 +411,14 @@ class HeadshotKiosk:
         self.button_frame: tk.Frame | None = None
         self.preview_countdown_label: tk.Label | None = None
         self.flash_overlay: tk.Frame | None = None
+
+        self.previous_motion_frame: np.ndarray | None = None
+        self.last_display_wake_time: float = 0.0
+
+        self.last_user_activity_time: float = time.monotonic()
+        self.control_blank_overlay: tk.Frame | None = None
+        self.preview_blank_overlay: tk.Frame | None = None
+        self.screen_blank_active: bool = False
 
         self.shutdown_button: tk.Button | None = None
         self.pending_shutdown_after_id: str | None = None
@@ -686,6 +713,8 @@ class HeadshotKiosk:
         return None
 
     def handle_keypress(self, event: Any) -> None:
+        self.note_user_activity()
+
         if event.keysym == "Escape":
             self.quit()
             return
@@ -1375,6 +1404,148 @@ class HeadshotKiosk:
         with smtplib.SMTP(email.smtp_server, email.smtp_port) as smtp:
             smtp.send_message(msg)
 
+    def blank_screens(self) -> None:
+        if self.screen_blank_active:
+            return
+
+        assert self.preview_window is not None
+
+        self.previous_motion_frame = None
+
+        self.screen_blank_active = True
+
+        self.control_blank_overlay = tk.Frame(
+            self.control_window,
+            bg="black",
+        )
+        self.control_blank_overlay.place(
+            relx=0,
+            rely=0,
+            relwidth=1,
+            relheight=1,
+        )
+        self.control_blank_overlay.lift()
+
+        self.preview_blank_overlay = tk.Frame(
+            self.preview_window,
+            bg="black",
+        )
+        self.preview_blank_overlay.place(
+            relx=0,
+            rely=0,
+            relwidth=1,
+            relheight=1,
+        )
+        self.preview_blank_overlay.lift()
+
+    def unblank_screens(self) -> None:
+        self.screen_blank_active = False
+
+        if self.control_blank_overlay is not None:
+            self.control_blank_overlay.destroy()
+            self.control_blank_overlay = None
+
+        if self.preview_blank_overlay is not None:
+            self.preview_blank_overlay.destroy()
+            self.preview_blank_overlay = None
+
+        self.control_window.update_idletasks()
+
+        if self.preview_window is not None:
+            self.preview_window.update_idletasks()
+
+    def check_idle_blanking(self) -> None:
+        if not self.config.idle_blank.enabled:
+            return
+
+        if self.state is not KioskState.IDLE:
+            return
+
+        if self.screen_blank_active:
+            return
+
+        idle_ms = (
+            time.monotonic()
+            - self.last_user_activity_time
+        ) * 1000
+
+        if idle_ms >= self.config.idle_blank.timeout_ms:
+            self.blank_screens()
+
+    def note_user_activity(self) -> None:
+        self.last_user_activity_time = time.monotonic()
+
+        if self.screen_blank_active:
+            self.unblank_screens()
+
+    def check_motion_activity(self, frame: np.ndarray) -> None:
+        motion = self.config.motion_wake
+
+        if not motion.enabled:
+            return
+
+        small = cv2.resize(
+            frame,
+            (160, 90),
+            interpolation=cv2.INTER_AREA,
+        )
+
+        gray = cv2.cvtColor(
+            small,
+            cv2.COLOR_BGR2GRAY,
+        )
+
+        gray = cv2.GaussianBlur(
+            gray,
+            (5, 5),
+            0,
+        )
+
+        if self.previous_motion_frame is None:
+            self.previous_motion_frame = gray
+            return
+
+        difference = cv2.absdiff(
+            self.previous_motion_frame,
+            gray,
+        )
+
+        _, thresholded = cv2.threshold(
+            difference,
+            motion.motion_threshold,
+            255,
+            cv2.THRESH_BINARY,
+        )
+
+        changed_pixels = cv2.countNonZero(thresholded)
+
+        if self.screen_blank_active:
+
+            if (
+                changed_pixels
+                >= motion.wake_pixels_threshold
+            ):
+                self.note_user_activity()
+                self.previous_motion_frame = None
+
+            return
+
+        self.previous_motion_frame = gray
+
+        if (
+            changed_pixels
+            >= motion.activity_pixels_threshold
+        ):
+            self.last_user_activity_time = time.monotonic()
+
+        now = time.monotonic()
+
+        if (
+            now - self.last_display_wake_time
+            >= motion.minimum_seconds_between_wakes
+        ):
+            self.last_display_wake_time = now
+
     def update_video(self) -> None:
         assert self.cap is not None
         assert self.video_label is not None
@@ -1384,6 +1555,13 @@ class HeadshotKiosk:
 
         if ret:
             frame = self.transform_frame(frame)
+
+            if self.state is KioskState.IDLE:
+                self.check_motion_activity(frame)
+            else:
+                self.previous_motion_frame = None
+
+            self.check_idle_blanking()
 
             if self.config.square_output:
                 frame = self.eye_square_crop(frame)

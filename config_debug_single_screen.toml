@@ -66,6 +66,20 @@ debug_first_name = "Debug User"
 debug_username = "debug_user"
 debug_email = "debug_user@example.com"
 
+[motion_wake]
+enabled = true
+motion_threshold = 18              # Number of changed pixels required
+                                   # to wake a blanked screen
+activity_pixels_threshold = 100    # Number of changed pixels required
+                                   # to keep the screen awake
+wake_pixels_threshold = 2500       # Number of changed pixels required
+                                   # to wake a blanked screen
+minimum_seconds_between_wakes = 5
+
+[idle_blank]
+enabled = true
+timeout_ms = 600000
+
 [shutdown]
 enabled = false
 authorized_usernames = [""]
