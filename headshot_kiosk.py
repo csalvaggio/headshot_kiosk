@@ -1706,7 +1706,13 @@ def load_config(config_path: Path) -> HeadshotConfig:
     with config_path.open("rb") as f:
         config_data = tomllib.load(f)
 
-    return HeadshotConfig.model_validate(config_data)
+    config = HeadshotConfig.model_validate(config_data)
+
+    if not config.output_dir.is_absolute():
+        config_data["output_dir"] = SCRIPT_DIR / config.output_dir
+        config = HeadshotConfig.model_validate(config_data)
+
+    return config
 
 
 def parse_args() -> argparse.Namespace:
